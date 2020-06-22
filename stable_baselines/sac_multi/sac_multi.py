@@ -14,7 +14,7 @@ from stable_baselines.sac.policies import SACPolicy
 from stable_baselines import logger
 
 
-class SAC(OffPolicyRLModel):
+class SAC_MULTI(OffPolicyRLModel):
     """
     Soft Actor-Critic (SAC)
     Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor,
