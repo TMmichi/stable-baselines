@@ -65,6 +65,7 @@ class BaseRLModel(ABC):
         self.ep_info_buf = None
 
         if env is not None:
+            print("env is not none")
             if isinstance(env, str):
                 if self.verbose >= 1:
                     print("Creating environment from the given name, wrapped in a DummyVecEnv.")
@@ -1032,10 +1033,13 @@ class OffPolicyRLModel(BaseRLModel):
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
         print("data: ",data)
+        # NOTE: Once loaded, type of policy is fixed
+        print("policy: ", data["policy"])
+        attrs = vars(data["policy"])
+        print(', '.join("%s: %s" % item for item in attrs.items()))
         print("kwargs: ",kwargs)
         model.set_env(env)
         model.setup_model()
-        #print("params: ", params)
         print("params type: ",type(params))
         print("params keys: ",params.keys())
         for name, value in params.items():
