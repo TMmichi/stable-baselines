@@ -187,6 +187,7 @@ class FeedForwardPolicy(SACPolicy):
         self.activ_fn = act_fun
 
     def make_actor(self, obs=None, reuse=False, scope="pi"):
+        print("Making Actor:")
         if obs is None:
             obs = self.processed_obs
 

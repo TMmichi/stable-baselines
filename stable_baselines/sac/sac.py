@@ -99,7 +99,7 @@ class SAC(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.policy_tf = None
-        self.layers = None
+        self.layers = layers
         self.target_entropy = target_entropy
         self.full_tensorboard_log = full_tensorboard_log
 
@@ -132,6 +132,7 @@ class SAC(OffPolicyRLModel):
         return policy.obs_ph, self.actions_ph, deterministic_action
 
     def setup_model(self):
+        print("Setting up model")
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
