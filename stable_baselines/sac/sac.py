@@ -143,9 +143,9 @@ class SAC(OffPolicyRLModel):
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
-                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, self.layers,
+                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                  **self.policy_kwargs)
-                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, self.layers,
+                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                      **self.policy_kwargs)
 
                     # Initialize Placeholders
