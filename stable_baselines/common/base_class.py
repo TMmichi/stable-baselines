@@ -128,7 +128,7 @@ class BaseRLModel(ABC):
 
         # sanity checking the environment
         assert self.observation_space == env.observation_space, \
-            "Error: the environment passed must have at least the same observation space as the model was trained on."
+            "Error: the environment passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space.shape[0], env.observation_space.shape[0])
         assert self.action_space == env.action_space, \
             "Error: the environment passed must have at least the same action space as the model was trained on."
         if self._requires_vec_env:
@@ -262,7 +262,10 @@ class BaseRLModel(ABC):
         # For each loadable parameter, create appropiate
         # placeholder and an assign op, and store them to
         # self.load_param_ops as dict of variable.name -> (placeholder, assign)
+        print("location - self.get_parameter_list: ",self.get_parameter_list)
         loadable_parameters = self.get_parameter_list()
+        print("loadable parameters: ",loadable_parameters)
+
         # Use OrderedDict to store order for backwards compatibility with
         # list-based params
         self._param_load_ops = OrderedDict()
@@ -457,6 +460,7 @@ class BaseRLModel(ABC):
         """
         # Make sure we have assign ops
         if self._param_load_ops is None:
+            print("No params")
             self._setup_load_operations()
 
         if isinstance(load_path_or_dict, dict):
@@ -911,6 +915,7 @@ class ActorCriticRLModel(BaseRLModel):
         return ret
 
     def get_parameter_list(self):
+        print("in get_parameter_list - ActorCritic")
         return self.params
 
     @abstractmethod
@@ -1026,8 +1031,16 @@ class OffPolicyRLModel(BaseRLModel):
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
+        print("data: ",data)
+        print("kwargs: ",kwargs)
         model.set_env(env)
         model.setup_model()
+        #print("params: ", params)
+        print("params type: ",type(params))
+        print("params keys: ",params.keys())
+        for name, value in params.items():
+            print("name: ",name, " // value: ",value)
+            break
 
         model.load_parameters(params)
 
