@@ -99,7 +99,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.policy_tf = None
-        self.layers = None
+        self.layers = layers
         self.target_entropy = target_entropy
         self.full_tensorboard_log = full_tensorboard_log
 
@@ -132,6 +132,7 @@ class SAC_MULTI(OffPolicyRLModel):
         return policy.obs_ph, self.actions_ph, deterministic_action
 
     def setup_model(self):
+        print("Setting up model")
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -142,9 +143,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
-                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, self.layers,
+                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                  **self.policy_kwargs)
-                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, self.layers,
+                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                      **self.policy_kwargs)
 
                     # Initialize Placeholders
