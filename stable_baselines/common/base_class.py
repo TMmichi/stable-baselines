@@ -263,9 +263,9 @@ class BaseRLModel(ABC):
         # For each loadable parameter, create appropiate
         # placeholder and an assign op, and store them to
         # self.load_param_ops as dict of variable.name -> (placeholder, assign)
-        print("location - self.get_parameter_list: ",self.get_parameter_list)
         loadable_parameters = self.get_parameter_list()
-        print("loadable parameters: ",loadable_parameters)
+        for item in loadable_parameters:
+            print("param: ",item)
 
         # Use OrderedDict to store order for backwards compatibility with
         # list-based params
@@ -467,6 +467,7 @@ class BaseRLModel(ABC):
         if isinstance(load_path_or_dict, dict):
             # Assume `load_path_or_dict` is dict of variable.name -> ndarrays we want to load
             params = load_path_or_dict
+            print("params = dict")
         elif isinstance(load_path_or_dict, list):
             warnings.warn("Loading model parameters from a list. This has been replaced " +
                           "with parameter dictionaries with variable names and parameters. " +
@@ -491,12 +492,15 @@ class BaseRLModel(ABC):
         # Keep track of not-updated variables
         not_updated_variables = set(self._param_load_ops.keys())
         for param_name, param_value in params.items():
+            print("param_name: ", param_name)
             placeholder, assign_op = self._param_load_ops[param_name]
             feed_dict[placeholder] = param_value
             # Create list of tf.assign operations for sess.run
             param_update_ops.append(assign_op)
             # Keep track which variables are updated
             not_updated_variables.remove(param_name)
+
+        print("sess in base_class: ",self.sess)
 
         # Check that we updated all parameters if exact_match=True
         if exact_match and len(not_updated_variables) > 0:
@@ -1035,16 +1039,15 @@ class OffPolicyRLModel(BaseRLModel):
         print("data: ",data)
         # NOTE: Once loaded, type of policy is fixed
         print("policy: ", data["policy"])
-        attrs = vars(data["policy"])
-        print(', '.join("%s: %s" % item for item in attrs.items()))
         print("kwargs: ",kwargs)
         model.set_env(env)
         model.setup_model()
         print("params type: ",type(params))
         print("params keys: ",params.keys())
         for name, value in params.items():
-            print("name: ",name, " // value: ",value)
-            break
+            print("name: ",name)
+            print("value type: ", type(value))
+            print("value size: ", value.shape[:])
 
         model.load_parameters(params)
 
