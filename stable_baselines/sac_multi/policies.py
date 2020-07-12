@@ -191,6 +191,7 @@ class FeedForwardPolicy(SACPolicy):
             obs = self.processed_obs
 
         with tf.variable_scope(scope, reuse=reuse):
+            print("obs: ",obs)
             if self.feature_extraction == "cnn":
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
