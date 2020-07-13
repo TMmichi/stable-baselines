@@ -461,13 +461,10 @@ class BaseRLModel(ABC):
         """
         # Make sure we have assign ops
         if self._param_load_ops is None:
-            print("No params")
             self._setup_load_operations()
-
         if isinstance(load_path_or_dict, dict):
             # Assume `load_path_or_dict` is dict of variable.name -> ndarrays we want to load
             params = load_path_or_dict
-            print("params = dict")
         elif isinstance(load_path_or_dict, list):
             warnings.warn("Loading model parameters from a list. This has been replaced " +
                           "with parameter dictionaries with variable names and parameters. " +
