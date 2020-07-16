@@ -184,6 +184,10 @@ class BaseRLModel(ABC):
         """
         pass
 
+    @abstractmethod
+    def setup_custom_model(self, primitives):
+        pass
+
     def _init_callback(self,
                       callback: Union[None, Callable, List[BaseCallback], BaseCallback]
                       ) -> BaseCallback:
@@ -229,6 +233,121 @@ class BaseRLModel(ABC):
             self.episode_reward = np.zeros((self.n_envs,))
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
+
+    @classmethod
+    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], layer_structure, loaded_policy=None) -> dict:
+        '''
+        Returns info of the primtive as a dictionary
+
+        :param name: (str) name of the primitive
+        :param primitive_dict: (dict) primitive dictionary in which to store data
+        :param obs_dimension: (int) observation space dimension for the primitive
+        :param obs_range: ([float, float] or [int, int] or int) observation range. If int, then range fixed to 0
+        :param obs_index: ([int, ...]) list of indices of the observation for the primitive
+        :param act_dimension: (int) action space dimension for the primitive
+        :param act_range: ([float, float] or [int, int]) action range
+        :param act_index: ([int, ...] or int) list of indices of the action for the primitive. If int, then action_index_array = [0:act_index]
+        :param layer_structure: ([int, ...]) hidden layer structure of the primitive
+        :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
+        :return: (dict: {'obs':tuple, 'act':tuple, 'layer':list}) primitive information
+        '''
+        if isinstance(loaded_policy, type(None)):
+            assert obs_dimension == len(obs_index), '\033[91m[ERROR]: obs_dimension mismatch with the length of obs_index.\
+                                                    obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_dimension, len(obs_index))
+
+            if isinstance(obs_range, list):
+                obs_range_max = np.array([max(obs_range)]*obs_dimension)
+                obs_range_min = np.array([min(obs_range)]*obs_dimension)
+                obs = (gym.spaces.Box(obs_range_min, obs_range_max, dtype=np.float32), obs_index.sort())
+            elif isinstance(obs_range, int):
+                obs_range_array = np.array([0]*obs_dimension)
+                obs = (gym.spaces.Box(obs_range_array, obs_range_array, dtype=np.float32), obs_index.sort())
+            else:
+                raise TypeError("\033[91m[ERROR]: obs_range wrong type - Should be a list or an int. Received {0}\033[0m".format(type(obs_range)))
+            
+            if isinstance(act_index, list):
+                assert act_dimension == len(act_index), '\033[91m[ERROR]: act_dimension mismatch with the length of act_index.\
+                                                    act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_dimension, len(act_index))
+            elif isinstance(act_index, int):
+                act_index = list(range(act_index))
+            else:
+                raise TypeError("\033[91m[ERROR]: act_index wrong type, should be a list or an int. Received {0}\033[0m".format(type(act_index)))
+            act_range_max = np.array([max(act_range)]*act_dimension)
+            act_range_min = np.array([min(act_range)]*act_dimension)
+            act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index.sort())
+            
+        elif isinstance(loaded_policy, tuple):
+            data_dict, param_dict = loaded_policy
+
+            obs_box = data_dict['observation_space']
+            act_box = data_dict['action_space']
+            assert len(obs_index) == obs_box.shape[0], '\033[91m[ERROR]: Loaded observation dimension mismatch with length of obs_index.\
+                                                    obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_box.shape[0], len(obs_index))
+            assert len(act_index) == act_box.shape[0], '\033[91m[ERROR]: Loaded action dimension mismatch with length of act_index.\
+                                                    act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_box.shape[0], len(act_index))
+            obs = (obs_box, obs_index.sort())
+            act = (act_box, act_index.sort())
+
+            if 'pretrained_param' not in primitive_dict.keys():
+                primitive_dict['pretrained_param'] = ([],{})
+            updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict)
+            primitive_dict['pretrained_param'][0] += updated_name
+            primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
+
+            layer_structure = cls.get_policy_layer_structure((obs, act), param_dict)
+        else:
+            raise TypeError("\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
+
+        primitive_dict[name] = {'obs': obs, 'act': act, 'layer': layer_structure}
+
+    @staticmethod
+    def loaded_policy_name_update(primitive_name, loaded_policy_dict):
+        '''
+        Concatenate name of each layers with name of the primitive
+
+        :param name: (str) name of the primitive
+        :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
+        :return: (list, dict) List consisting names of layers with specified primitive
+                                Dictionary of parameters by updated names
+        '''
+        layer_name_list = []
+        layer_param_dict = {}
+        for name, value in loaded_policy_dict.items():
+            name_elem = name.split("/")
+            assert 'LayerNorm' not in name_elem, "\033[91m[ERROR]: LayerNormalized policy is not supported for now. Try to load primitives with unnormalized layers\033[0m"
+
+            if 'pi' in name_elem:
+                insert_index = 2
+            elif 'values_fn' in name_elem:
+                insert_index = 3
+            else:
+                insert_index = 1
+            updated_name = '/'.join(name_elem.insert(insert_index, primitive_name))
+            layer_name_list.append(updated_name)
+            layer_param_dict[updated_name] = value
+
+        return layer_name_list, layer_param_dict
+
+    @staticmethod
+    def get_policy_layer_structure(argument_tuple, loaded_policy_dict):
+        '''
+        Return layer structure of the policy from parameter dictionary
+
+        :param argument_tuple: ((tuple, tuple)) Tuple containing info of observation and action
+        :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
+        :return: (list) Layer structure of the policy
+        '''
+        obs, _ = argument_tuple
+        obs_dim = len(obs[1])
+        primitive_layer_structure = []
+        for name, value in loaded_policy_dict.items():
+            if name.find("pi/fc") > -1:
+                if name.find("fc0/kernel") > -1:
+                    assert obs_dim == value.shape[0], "\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption\033[0m"
+                if name.find("bias") > -1:
+                    primitive_layer_structure.append(value.shape[0])
+
+        return primitive_layer_structure
 
     @abstractmethod
     def get_parameter_list(self):
@@ -534,6 +653,20 @@ class BaseRLModel(ABC):
         :param kwargs: extra arguments to change the model when loading
         """
         raise NotImplementedError()
+
+    @classmethod
+    @abstractmethod
+    def pretrainer_load(cls, policy, primitives, env, **kwargs):
+        """
+        Construct trainer from policy structure
+
+        :param policy: (Policy Class) class of SAC policy
+        :param primitives: (dict) primitives by name to which items assigned as an info of obs/act/layer_structure
+        :param env: (Gym Environment) the new environment to run the loaded model on
+        :param kwargs: extra arguments to change the model when loading
+        """
+        #raise NotImplementedError()
+        pass
 
     @staticmethod
     def _save_to_file_cloudpickle(save_path, data=None, params=None):
@@ -991,6 +1124,10 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
+    def setup_custom_model(self, primitives):
+        pass
+
+    @abstractmethod
     def learn(self, total_timesteps, callback=None,
               log_interval=100, tb_log_name="run", reset_num_timesteps=True, replay_wrapper=None):
         pass
@@ -1046,9 +1183,93 @@ class OffPolicyRLModel(BaseRLModel):
             print("value type: ", type(value))
             print("value size: ", value.shape[:])
 
-        model.load_parameters(params)
+        model.load_parameters(params, exact_match=False)
 
         return model
+
+    @classmethod
+    def pretrainer_load(cls, policy, primitives, env, **kwargs):
+        """
+        Construct trainer from policy structure
+
+        :param policy: (Policy Class) class of SAC policy
+        :param primitives: (dict) primitives by name to which items assigned as an info of obs/act/layer_structure
+        :param env: (Gym Environment) the new environment to run the loaded model on
+        :param kwargs: extra arguments to change the model when loading
+        """
+        
+        # model = SAC_MULTI
+        model = cls(policy=policy, env=None, _init_setup_model=False)
+
+        # Check the existence of 'train/weight' in primitives
+        cls.weight_check(primitives)
+        
+        # get total_obs_bound, total_act_bound
+        ranges = cls.range_primitive(primitives)
+        data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
+                'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)}
+        model.__dict__.update(data)
+        model.__dict__.update(kwargs)
+        
+        model.set_env(env)
+        model.setup_custom_model(primitives)
+
+        model.load_parameters(primitives['pretrained_param'][1], exact_match=False)
+
+        return model
+    
+    @staticmethod
+    def weight_check(primitives: dict):
+        '''
+        Check the existence of 'train/weight' in primitive dict
+
+        :param primitives: (dict) obs/act/structure info of primitives
+        '''
+        assert 'train/weight' in primitives.keys(), '\033[91m[ERROR]: No primitive name "train/weight". YOU MUST HAVE IT\033[0m'
+    
+    @staticmethod
+    def range_primitive(primitives: dict) -> list:
+        '''
+        Return range bounds of total observation/action space
+
+        :param primitives: (dict) obs/act/structure info of primitives
+        :return: ([2x2 np.array]): 
+            dims[0][0] = obs min np.array, dims[0][1] = obs max np.array
+            dims[1][0] = act min np.array, dims[1][1] = act max np.array
+        '''
+        obs_dim = primitives['train/weight']['obs'][1][-1] + 1  # dimension = last index + 1
+        obs_min_array = np.array([-float('inf')]*obs_dim)
+        obs_max_array = np.array([float('inf')]*obs_dim)
+
+        act_dim = 0
+        for name, info_dict in primitives.items():
+            if name != 'train/weight':
+                act_dim = max(act_dim, info_dict['act'][1][-1]+1)
+        act_min_array = np.array([-float('inf')]*act_dim)
+        act_max_array = np.array([float('inf')]*act_dim)
+
+        for name, info_dict in primitives.items():
+            # TODO: differenciate min/max bounds of each dimension of obs/act within a single primitive
+            obs_min_prim = info_dict['obs'][0].low.min()
+            obs_max_prim = info_dict['obs'][0].high.max()
+            act_min_prim = info_dict['act'][0].low.min()
+            act_max_prim = info_dict['act'][0].high.max()
+            for index in info_dict['obs'][1]:
+                obs_min_array[index] = obs_min_prim
+                if obs_min_array[index] not in [-float('inf'), obs_min_prim]:
+                    print("[WARNING]: You are about to overwrite min bound of obs[{0}] with {1}".format(obs_min_array[index], obs_min_prim))
+                obs_max_array[index] = obs_max_prim
+                if obs_max_array[index] not in [float('inf'), obs_max_prim]:
+                    print("[WARNING]: You are about to overwrite max bound of obs[{0}] with {1}".format(obs_max_array[index], obs_max_prim))
+                act_min_array[index] = act_min_prim
+                if act_min_array[index] not in [-float('inf'), act_min_prim]:
+                    print("[WARNING]: You are about to overwrite min bound of obs[{0}] with {1}".format(act_min_array[index], act_min_prim))
+                act_max_array[index] = act_max_prim
+                if act_max_array[index] not in [float('inf'), act_max_prim]:
+                    print("[WARNING]: You are about to overwrite max bound of obs[{0}] with {1}".format(act_max_array[index], act_max_prim))
+        ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
+
+        return ranges
 
 class _UnvecWrapper(VecEnvWrapper):
     def __init__(self, venv):

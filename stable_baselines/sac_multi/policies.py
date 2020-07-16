@@ -1,3 +1,5 @@
+from abc import abstractmethod
+
 import tensorflow as tf
 import numpy as np
 from gym.spaces import Box
@@ -64,6 +66,20 @@ def apply_squashing_func(mu_, pi_, logp_pi):
     return deterministic_policy, policy, logp_pi
 
 
+# TODO - Not done yet
+def fuse_networks_MCP(mu_array, log_std_array, weight):
+        """
+        Fuse distributions of policy into a MCP fashion
+
+        :param mu_array: ([tf.Tensor]) List of means
+        :param log_std_array: ([tf.Tensor]) List of log of the standard deviations
+        :param weight: (tf.Tensor) Weight tensor of each primitives
+        :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
+        """
+
+        return pi_MCP, mu_MCP, log_std_MCP
+
+
 class SACPolicy(BasePolicy):
     """
     Policy object that implements a SAC-like actor critic
@@ -103,6 +119,34 @@ class SACPolicy(BasePolicy):
 
     def make_critics(self, obs=None, action=None, reuse=False,
                      scope="values_fn", create_vf=True, create_qf=True):
+        """
+        Creates the two Q-Values approximator along with the Value function
+
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param action: (TensorFlow Tensor) The action placeholder
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name
+        :param create_vf: (bool) Whether to create Value fn or not
+        :param create_qf: (bool) Whether to create Q-Values fn or not
+        :return: ([tf.Tensor]) Mean, action and log probability
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def make_custom_actor(self, primitives, obs=None, reuse=False, scope="pi"):
+        """
+        Creates an actor object
+
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name of the actor
+        :return: (TensorFlow Tensor) the output tensor
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def make_custom_critics(self, primitives, obs=None, action=None, reuse=False,
+                    scope="values_fn", create_vf=True, create_qf=True):
         """
         Creates the two Q-Values approximator along with the Value function
 
@@ -230,6 +274,100 @@ class FeedForwardPolicy(SACPolicy):
 
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                      create_vf=True, create_qf=True):
+        if obs is None:
+            obs = self.processed_obs
+
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+            else:
+                critics_h = tf.layers.flatten(obs)
+
+            if create_vf:
+                # Value function
+                with tf.variable_scope('vf', reuse=reuse):
+                    vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                self.value_fn = value_fn
+
+            if create_qf:
+                # Concatenate preprocessed state and action
+                qf_h = tf.concat([critics_h, action], axis=-1)
+
+                # Double Q values to reduce overestimation
+                with tf.variable_scope('qf1', reuse=reuse):
+                    qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+
+                with tf.variable_scope('qf2', reuse=reuse):
+                    qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+
+                self.qf1 = qf1
+                self.qf2 = qf2
+
+        return self.qf1, self.qf2, self.value_fn
+
+    def make_custom_actor(self, primitives, obs=None, reuse=False, scope="pi"):
+        if obs is None:
+            obs = self.processed_obs
+        mu_array = []
+        log_std_array = []
+        self.entropy = 0
+
+        for name, item in primitives.items():
+            # When the primitive is not pretrained
+            if isinstance(item, dict):
+                with tf.variable_scope(scope + "/" + name, reuse=reuse):
+                    if self.feature_extraction == "cnn":
+                        pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                    else:
+                        pi_h = tf.layers.flatten(obs)
+                    
+                    #------------- Input observation seiving layer -------------#
+                    seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])])
+                    for i in range(len(item['obs'][1])):
+                        seive_layer[item['obs'][1][i]][i] = 1
+                    pi_h = tf.matmul(pi_h, seive_layer)
+                    #------------- Observation seiving layer End -------------#
+
+                    pi_h = mlp(pi_h, item['layer'], self.activ_fn, layer_norm=self.layer_norm)
+
+                    if name == 'train/weight':
+                        weight = tf.layers.dense(pi_h, item['act_dimension'], activation='softmax')
+                    else:
+                        mu_ = tf.layers.dense(pi_h, item['act_dimension'], activation=None)
+                        mu_array.append(mu_)
+
+                        # Important difference with SAC and other algo such as PPO:
+                        # the std depends on the state, so we cannot use stable_baselines.common.distribution
+                        log_std = tf.layers.dense(pi_h, item['act_dimension'], activation=None)
+
+                if name != 'train/weight':
+                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    log_std_array.append(log_std)
+                    std = tf.exp(log_std)
+                    self.entropy += gaussian_entropy(log_std)
+            else:
+                raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be one of 'dict' or 'tuple'.\033[0m".format(type(item)))
+            
+        # Reparameterization trick for MCP
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight)
+        logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
+        self.std = tf.exp(log_std_MCP)
+        self.policy_train = pi_MCP
+        self.deterministic_policy_train = self.act_mu = mu_MCP
+
+        # policies with squashing func at test time
+        # TODO: Need to check if these variables are used @ training time
+        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        self.policy = policy
+        self.deterministic_policy = deterministic_policy
+
+        return deterministic_policy, policy, logp_pi
+
+    def make_custom_critics(self, primitives, obs=None, action=None, reuse=False, scope="values_fn",
+                    create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
 
