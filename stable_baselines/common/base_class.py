@@ -129,7 +129,7 @@ class BaseRLModel(ABC):
 
         # sanity checking the environment
         assert self.observation_space == env.observation_space, \
-            "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space, env.observation_space)
+            "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space.low, env.observation_space.low)
         assert self.action_space == env.action_space, \
             "Error: the environment passed must have at least the same action space as the model was trained on."
         if self._requires_vec_env:
@@ -258,10 +258,12 @@ class BaseRLModel(ABC):
             if isinstance(obs_range, list):
                 obs_range_max = np.array([max(obs_range)]*obs_dimension)
                 obs_range_min = np.array([min(obs_range)]*obs_dimension)
-                obs = (gym.spaces.Box(obs_range_min, obs_range_max, dtype=np.float32), obs_index.sort())
+                obs_index.sort()
+                obs = (gym.spaces.Box(obs_range_min, obs_range_max, dtype=np.float32), obs_index)
             elif isinstance(obs_range, int):
                 obs_range_array = np.array([0]*obs_dimension)
-                obs = (gym.spaces.Box(obs_range_array, obs_range_array, dtype=np.float32), obs_index.sort())
+                obs_index.sort()
+                obs = (gym.spaces.Box(obs_range_array, obs_range_array, dtype=np.float32), obs_index)
             else:
                 raise TypeError("\033[91m[ERROR]: obs_range wrong type - Should be a list or an int. Received {0}\033[0m".format(type(obs_range)))
             
@@ -274,7 +276,8 @@ class BaseRLModel(ABC):
                 raise TypeError("\033[91m[ERROR]: act_index wrong type, should be a list or an int. Received {0}\033[0m".format(type(act_index)))
             act_range_max = np.array([max(act_range)]*act_dimension)
             act_range_min = np.array([min(act_range)]*act_dimension)
-            act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index.sort())
+            act_index.sort()
+            act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
             
         elif isinstance(loaded_policy, tuple):
             data_dict, param_dict = loaded_policy
@@ -285,11 +288,12 @@ class BaseRLModel(ABC):
                                                     obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_box.shape[0], len(obs_index))
             assert len(act_index) == act_box.shape[0], '\033[91m[ERROR]: Loaded action dimension mismatch with length of act_index.\
                                                     act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_box.shape[0], len(act_index))
-            obs = (obs_box, obs_index.sort())
-            act = (act_box, act_index.sort())
-
+            obs_index.sort()
+            act_index.sort()
+            obs = (obs_box, obs_index)
+            act = (act_box, act_index)
             if 'pretrained_param' not in primitive_dict.keys():
-                primitive_dict['pretrained_param'] = ([],{})
+                primitive_dict['pretrained_param'] = [[],{}]
             updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict)
             primitive_dict['pretrained_param'][0] += updated_name
             primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
@@ -322,7 +326,9 @@ class BaseRLModel(ABC):
                 insert_index = 3
             else:
                 insert_index = 1
-            updated_name = '/'.join(name_elem.insert(insert_index, primitive_name))
+            name_elem.insert(insert_index, primitive_name)
+            updated_name = '/'.join(name_elem)
+            print(updated_name)
             layer_name_list.append(updated_name)
             layer_param_dict[updated_name] = value
 
@@ -1243,31 +1249,33 @@ class OffPolicyRLModel(BaseRLModel):
 
         act_dim = 0
         for name, info_dict in primitives.items():
-            if name != 'train/weight':
+            if name not in  ['train/weight', 'pretrained_param']:
                 act_dim = max(act_dim, info_dict['act'][1][-1]+1)
         act_min_array = np.array([-float('inf')]*act_dim)
         act_max_array = np.array([float('inf')]*act_dim)
 
         for name, info_dict in primitives.items():
             # TODO: differenciate min/max bounds of each dimension of obs/act within a single primitive
-            obs_min_prim = info_dict['obs'][0].low.min()
-            obs_max_prim = info_dict['obs'][0].high.max()
-            act_min_prim = info_dict['act'][0].low.min()
-            act_max_prim = info_dict['act'][0].high.max()
-            for index in info_dict['obs'][1]:
-                obs_min_array[index] = obs_min_prim
-                if obs_min_array[index] not in [-float('inf'), obs_min_prim]:
-                    print("[WARNING]: You are about to overwrite min bound of obs[{0}] with {1}".format(obs_min_array[index], obs_min_prim))
-                obs_max_array[index] = obs_max_prim
-                if obs_max_array[index] not in [float('inf'), obs_max_prim]:
-                    print("[WARNING]: You are about to overwrite max bound of obs[{0}] with {1}".format(obs_max_array[index], obs_max_prim))
-                act_min_array[index] = act_min_prim
-                if act_min_array[index] not in [-float('inf'), act_min_prim]:
-                    print("[WARNING]: You are about to overwrite min bound of obs[{0}] with {1}".format(act_min_array[index], act_min_prim))
-                act_max_array[index] = act_max_prim
-                if act_max_array[index] not in [float('inf'), act_max_prim]:
-                    print("[WARNING]: You are about to overwrite max bound of obs[{0}] with {1}".format(act_max_array[index], act_max_prim))
-        ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
+            if name not in ['train/weight', 'pretrained_param']:
+                obs_min_prim = info_dict['obs'][0].low.min()
+                obs_max_prim = info_dict['obs'][0].high.max()
+                act_min_prim = info_dict['act'][0].low.min()
+                act_max_prim = info_dict['act'][0].high.max()
+                for idx in info_dict['obs'][1]:
+                    if obs_min_array[idx] not in [-float('inf'), obs_min_prim]:
+                        print("\033[93m[WARNING]: You are about to overwrite min bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_min_array[idx], obs_min_prim))
+                    obs_min_array[idx] = obs_min_prim
+                    if obs_max_array[idx] not in [float('inf'), obs_max_prim]:
+                        print("\033[93m[WARNING]: You are about to overwrite max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_max_array[idx], obs_max_prim))
+                    obs_max_array[idx] = obs_max_prim
+                for idx in info_dict['act'][1]:
+                    if act_min_array[idx] not in [-float('inf'), act_min_prim]:
+                        print("\033[93m[WARNING]: You are about to overwrite min bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(act_min_array[idx], act_min_prim))
+                    act_min_array[idx] = act_min_prim
+                    if act_max_array[idx] not in [float('inf'), act_max_prim]:
+                        print("\033[93m[WARNING]: You are about to overwrite max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(act_max_array[idx], act_max_prim))
+                    act_max_array[idx] = act_max_prim
+            ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
 
         return ranges
 

@@ -76,6 +76,10 @@ def fuse_networks_MCP(mu_array, log_std_array, weight):
         :param weight: (tf.Tensor) Weight tensor of each primitives
         :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
         """
+        print(weight)
+        for i in range(len(mu_array)):
+            print(mu_array[i])
+            print(log_std_array[i])
 
         return pi_MCP, mu_MCP, log_std_MCP
 
@@ -308,48 +312,62 @@ class FeedForwardPolicy(SACPolicy):
 
         return self.qf1, self.qf2, self.value_fn
 
-    def make_custom_actor(self, primitives, obs=None, reuse=False, scope="pi"):
+    def make_custom_actor(self, obs=None, primitives=None, reuse=False, scope="pi"):
         if obs is None:
             obs = self.processed_obs
         mu_array = []
         log_std_array = []
         self.entropy = 0
-
         for name, item in primitives.items():
-            # When the primitive is not pretrained
-            if isinstance(item, dict):
-                with tf.variable_scope(scope + "/" + name, reuse=reuse):
+            if name == 'train/weight':
+                with tf.variable_scope(name, reuse=reuse):
                     if self.feature_extraction == "cnn":
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
                     else:
                         pi_h = tf.layers.flatten(obs)
                     
                     #------------- Input observation seiving layer -------------#
-                    seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])])
+                    seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
                     for i in range(len(item['obs'][1])):
                         seive_layer[item['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, seive_layer)
                     #------------- Observation seiving layer End -------------#
 
                     pi_h = mlp(pi_h, item['layer'], self.activ_fn, layer_norm=self.layer_norm)
+                    weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+            else:
+                if isinstance(item, dict):
+                    with tf.variable_scope(scope + "/" + name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation seiving layer -------------#
+                        seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            seive_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, seive_layer)
+                        #------------- Observation seiving layer End -------------#
 
-                    if name == 'train/weight':
-                        weight = tf.layers.dense(pi_h, item['act_dimension'], activation='softmax')
-                    else:
-                        mu_ = tf.layers.dense(pi_h, item['act_dimension'], activation=None)
+                        pi_h = mlp(pi_h, item['layer'], self.activ_fn, layer_norm=self.layer_norm)
+
+                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         mu_array.append(mu_)
 
                         # Important difference with SAC and other algo such as PPO:
                         # the std depends on the state, so we cannot use stable_baselines.common.distribution
-                        log_std = tf.layers.dense(pi_h, item['act_dimension'], activation=None)
+                        log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
 
-                if name != 'train/weight':
                     log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                     log_std_array.append(log_std)
-                    std = tf.exp(log_std)
+                    
                     self.entropy += gaussian_entropy(log_std)
-            else:
-                raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be one of 'dict' or 'tuple'.\033[0m".format(type(item)))
+                elif isinstance(item, list):
+                    # primitive['pretrained_param']
+                    pass
+                else:
+                    raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be 'dict'.\033[0m".format(type(item)))
             
         # Reparameterization trick for MCP
         pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight)
