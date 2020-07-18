@@ -386,39 +386,69 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
+    def make_custom_critics(self, obs=None, action=None, primitives=None, reuse=False, scope="values_fn",
                     create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
 
-        with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn":
-                critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-            else:
-                critics_h = tf.layers.flatten(obs)
+        if primitives == None:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                else:
+                    critics_h = tf.layers.flatten(obs)
 
-            if create_vf:
-                # Value function
-                with tf.variable_scope('vf', reuse=reuse):
-                    vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                    value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                self.value_fn = value_fn
+                if create_vf:
+                    # Value function
+                    with tf.variable_scope('vf', reuse=reuse):
+                        vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                    self.value_fn = value_fn
 
-            if create_qf:
-                # Concatenate preprocessed state and action
-                qf_h = tf.concat([critics_h, action], axis=-1)
+                if create_qf:
+                    # Concatenate preprocessed state and action
+                    qf_h = tf.concat([critics_h, action], axis=-1)
 
-                # Double Q values to reduce overestimation
-                with tf.variable_scope('qf1', reuse=reuse):
-                    qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                    qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+                    # Double Q values to reduce overestimation
+                    with tf.variable_scope('qf1', reuse=reuse):
+                        qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
 
-                with tf.variable_scope('qf2', reuse=reuse):
-                    qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                    qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+                    with tf.variable_scope('qf2', reuse=reuse):
+                        qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
 
-                self.qf1 = qf1
-                self.qf2 = qf2
+                    self.qf1 = qf1
+                    self.qf2 = qf2
+        else:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                else:
+                    critics_h = tf.layers.flatten(obs)
+
+                if create_vf:
+                    # Value function
+                    with tf.variable_scope('vf', reuse=reuse):
+                        vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                    self.value_fn = value_fn
+
+                if create_qf:
+                    # Concatenate preprocessed state and action
+                    qf_h = tf.concat([critics_h, action], axis=-1)
+
+                    # Double Q values to reduce overestimation
+                    with tf.variable_scope('qf1', reuse=reuse):
+                        qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+
+                    with tf.variable_scope('qf2', reuse=reuse):
+                        qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                        qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+
+                    self.qf1 = qf1
+                    self.qf2 = qf2
 
         return self.qf1, self.qf2, self.value_fn
 
