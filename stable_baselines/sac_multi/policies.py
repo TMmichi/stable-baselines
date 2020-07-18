@@ -80,7 +80,9 @@ def fuse_networks_MCP(mu_array, log_std_array, weight):
         for i in range(len(mu_array)):
             print(mu_array[i])
             print(log_std_array[i])
-
+        
+        pi_MCP = mu_MCP = mu_array[0]
+        log_std_MCP = log_std_array[0]
         return pi_MCP, mu_MCP, log_std_MCP
 
 
@@ -384,7 +386,7 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics(self, primitives, obs=None, action=None, reuse=False, scope="values_fn",
+    def make_custom_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                     create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs

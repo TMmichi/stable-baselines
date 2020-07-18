@@ -445,7 +445,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                     # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
-                    var_list = tf_util.get_trainable_vars('model/pi/train')+tf_util.get_trainable_vars('model/train')
+                    var_list = tf_util.get_trainable_vars('model/pi/train')+tf_util.get_trainable_vars('model/train/weight')
                     print(var_list)
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi/train')+tf_util.get_trainable_vars('model/train'))
 
@@ -491,11 +491,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('value_loss', value_loss)
                     tf.summary.scalar('entropy', self.entropy)
+                    '''
                     for name, value in primitives.items():
                         pi_data = tf_util.get_trainable_vars('model/pi/'+name)
+                        for item in pi_data:
+                            print(item)
                         #val_data = tf_util.get_trainable_vars('model/pi/'+name)
                         tf.summary.histogram('model/pi/'+name.split('/')[1], pi_data)
-                        #tf.summary.histogram('model/values_fn/vf/'+name.split('/')[1], val_data)
+                        #tf.summary.histogram('model/values_fn/vf/'+name.split('/')[1], val_data)'''
                     if ent_coef_loss is not None:
                         tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                         tf.summary.scalar('ent_coef', self.ent_coef)
