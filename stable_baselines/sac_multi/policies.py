@@ -76,13 +76,16 @@ def fuse_networks_MCP(mu_array, log_std_array, weight):
         :param weight: (tf.Tensor) Weight tensor of each primitives
         :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
         """
-        print(weight)
+        pi_MCP = mu_MCP = log_std_MCP = std_sum = 0
         for i in range(len(mu_array)):
-            print(mu_array[i])
-            print(log_std_array[i])
-        
-        pi_MCP = mu_MCP = mu_array[0]
-        log_std_MCP = log_std_array[0]
+            weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            normed_weight_index = tf.divide(weight_tile_index,tf.exp(log_std_array[i]))
+            mu_MCP += mu_array[i] * normed_weight_index
+            std_sum += normed_weight_index
+        std_MCP = tf.math.reciprocal(std_sum)
+        mu_MCP = mu_MCP * std_MCP
+        pi_MCP = mu_MCP + tf.random_normal(tf.shape(mu_MCP)) * std_MCP
+        log_std_MCP = tf.log(std_MCP)
         return pi_MCP, mu_MCP, log_std_MCP
 
 
@@ -386,12 +389,12 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics(self, obs=None, action=None, primitives=None, reuse=False, scope="values_fn",
+    def make_custom_critics(self, obs=None, action=None, primitives=None, separate_value=True, reuse=False, scope="values_fn",
                     create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
 
-        if primitives == None:
+        if not separate_value:
             with tf.variable_scope(scope, reuse=reuse):
                 if self.feature_extraction == "cnn":
                     critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)

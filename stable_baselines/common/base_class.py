@@ -185,7 +185,7 @@ class BaseRLModel(ABC):
         pass
 
     @abstractmethod
-    def setup_custom_model(self, primitives):
+    def setup_custom_model(self, primitives, separate_value):
         pass
 
     def _init_callback(self,
@@ -235,7 +235,7 @@ class BaseRLModel(ABC):
             self.ep_info_buf = deque(maxlen=100)
 
     @classmethod
-    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], layer_structure, loaded_policy=None) -> dict:
+    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], layer_structure, loaded_policy=None, separate_value=True):
         '''
         Returns info of the primtive as a dictionary
 
@@ -249,6 +249,7 @@ class BaseRLModel(ABC):
         :param act_index: ([int, ...] or int) list of indices of the action for the primitive. If int, then action_index_array = [0:act_index]
         :param layer_structure: ([int, ...]) hidden layer structure of the primitive
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
+        :param separate_value: (bool) Use separate value network
         :return: (dict: {'obs':tuple, 'act':tuple, 'layer':list}) primitive information
         '''
         if isinstance(loaded_policy, type(None)):
@@ -294,7 +295,7 @@ class BaseRLModel(ABC):
             act = (act_box, act_index)
             if 'pretrained_param' not in primitive_dict.keys():
                 primitive_dict['pretrained_param'] = [[],{}]
-            updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict)
+            updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict, separate_value)
             primitive_dict['pretrained_param'][0] += updated_name
             primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
 
@@ -305,32 +306,38 @@ class BaseRLModel(ABC):
         primitive_dict[name] = {'obs': obs, 'act': act, 'layer': layer_structure}
 
     @staticmethod
-    def loaded_policy_name_update(primitive_name, loaded_policy_dict):
+    def loaded_policy_name_update(primitive_name, loaded_policy_dict, separate_value):
         '''
         Concatenate name of each layers with name of the primitive
 
         :param name: (str) name of the primitive
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
+        :param separate_value: (bool) Use separate value network
         :return: (list, dict) List consisting names of layers with specified primitive
                                 Dictionary of parameters by updated names
         '''
         layer_name_list = []
         layer_param_dict = {}
         for name, value in loaded_policy_dict.items():
+            add_value = False
             name_elem = name.split("/")
             assert 'LayerNorm' not in name_elem, "\033[91m[ERROR]: LayerNormalized policy is not supported for now. Try to load primitives with unnormalized layers\033[0m"
 
             if 'pi' in name_elem:
                 insert_index = 2
+                add_value = True
             elif 'values_fn' in name_elem:
-                insert_index = 3
+                if separate_value:
+                    insert_index = 3
+                    add_value = True
             else:
-                insert_index = 1
-            name_elem.insert(insert_index, primitive_name)
-            updated_name = '/'.join(name_elem)
-            print(updated_name)
-            layer_name_list.append(updated_name)
-            layer_param_dict[updated_name] = value
+                pass
+            if add_value:
+                name_elem.insert(insert_index, primitive_name)
+                updated_name = '/'.join(name_elem)
+                print(updated_name)
+                layer_name_list.append(updated_name)
+                layer_param_dict[updated_name] = value
 
         return layer_name_list, layer_param_dict
 
@@ -1130,7 +1137,7 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def setup_custom_model(self, primitives):
+    def setup_custom_model(self, primitives, separate_value):
         pass
 
     @abstractmethod
@@ -1194,7 +1201,7 @@ class OffPolicyRLModel(BaseRLModel):
         return model
 
     @classmethod
-    def pretrainer_load(cls, policy, primitives, env, **kwargs):
+    def pretrainer_load(cls, policy, primitives, env, separate_value=True, **kwargs):
         """
         Construct trainer from policy structure
 
@@ -1218,7 +1225,7 @@ class OffPolicyRLModel(BaseRLModel):
         model.__dict__.update(kwargs)
         
         model.set_env(env)
-        model.setup_custom_model(primitives)
+        model.setup_custom_model(primitives, separate_value)
 
         model.load_parameters(primitives['pretrained_param'][1], exact_match=False)
 
