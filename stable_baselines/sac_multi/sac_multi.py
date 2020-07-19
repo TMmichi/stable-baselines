@@ -358,9 +358,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
-                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, separate_value,
+                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
                                                                     create_qf=True, create_vf=True)
-                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, separate_value,
+                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, separate_value,
                                                                     create_qf=True, create_vf=False,
                                                                     reuse=True)
 
@@ -398,7 +398,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 with tf.variable_scope("target", reuse=False):
                     # Create the value network
-                    _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, separate_value,
+                    _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
                                                                         create_qf=False, create_vf=True)
                     self.value_target = value_target
 
@@ -457,6 +457,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                    # TODO: Q: should value function be always fine-tunable?
                     values_params = tf_util.get_trainable_vars('model/values_fn')
 
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")

@@ -235,7 +235,7 @@ class BaseRLModel(ABC):
             self.ep_info_buf = deque(maxlen=100)
 
     @classmethod
-    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], layer_structure, loaded_policy=None, separate_value=True):
+    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], policy_layer_structure, loaded_policy=None, separate_value=True):
         '''
         Returns info of the primtive as a dictionary
 
@@ -247,10 +247,10 @@ class BaseRLModel(ABC):
         :param act_dimension: (int) action space dimension for the primitive
         :param act_range: ([float, float] or [int, int]) action range
         :param act_index: ([int, ...] or int) list of indices of the action for the primitive. If int, then action_index_array = [0:act_index]
-        :param layer_structure: ([int, ...]) hidden layer structure of the primitive
+        :param policy_layer_structure: ([int, ...]) hidden layer structure of the primitive policy
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
         :param separate_value: (bool) Use separate value network
-        :return: (dict: {'obs':tuple, 'act':tuple, 'layer':list}) primitive information
+        :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
         '''
         if isinstance(loaded_policy, type(None)):
             assert obs_dimension == len(obs_index), '\033[91m[ERROR]: obs_dimension mismatch with the length of obs_index.\
@@ -279,6 +279,7 @@ class BaseRLModel(ABC):
             act_range_min = np.array([min(act_range)]*act_dimension)
             act_index.sort()
             act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
+            value_layer_structure = None
             
         elif isinstance(loaded_policy, tuple):
             data_dict, param_dict = loaded_policy
@@ -299,11 +300,11 @@ class BaseRLModel(ABC):
             primitive_dict['pretrained_param'][0] += updated_name
             primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
 
-            layer_structure = cls.get_policy_layer_structure((obs, act), param_dict)
+            policy_layer_structure, value_layer_structure = cls.get_layer_structure((obs, act), param_dict, separate_value)
         else:
             raise TypeError("\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
 
-        primitive_dict[name] = {'obs': obs, 'act': act, 'layer': layer_structure}
+        primitive_dict[name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
 
     @staticmethod
     def loaded_policy_name_update(primitive_name, loaded_policy_dict, separate_value):
@@ -314,7 +315,7 @@ class BaseRLModel(ABC):
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
         :param separate_value: (bool) Use separate value network
         :return: (list, dict) List consisting names of layers with specified primitive
-                                Dictionary of parameters by updated names
+                              Dictionary of parameters by updated names
         '''
         layer_name_list = []
         layer_param_dict = {}
@@ -332,6 +333,7 @@ class BaseRLModel(ABC):
                     add_value = True
             else:
                 pass
+
             if add_value:
                 name_elem.insert(insert_index, primitive_name)
                 updated_name = '/'.join(name_elem)
@@ -342,25 +344,33 @@ class BaseRLModel(ABC):
         return layer_name_list, layer_param_dict
 
     @staticmethod
-    def get_policy_layer_structure(argument_tuple, loaded_policy_dict):
+    def get_layer_structure(argument_tuple, loaded_policy_dict, separate_value):
         '''
-        Return layer structure of the policy from parameter dictionary
+        Return layer structure of the policy/value from parameter dictionary
 
         :param argument_tuple: ((tuple, tuple)) Tuple containing info of observation and action
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
-        :return: (list) Layer structure of the policy
+        :param separate_value: (bool) Use separate value network
+        :return: (list, list) Layer structure of the policy/value
         '''
         obs, _ = argument_tuple
         obs_dim = len(obs[1])
-        primitive_layer_structure = []
+        policy_layer_structure = []
+        value_layer_structure = []
         for name, value in loaded_policy_dict.items():
             if name.find("pi/fc") > -1:
                 if name.find("fc0/kernel") > -1:
                     assert obs_dim == value.shape[0], "\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption\033[0m"
                 if name.find("bias") > -1:
-                    primitive_layer_structure.append(value.shape[0])
-
-        return primitive_layer_structure
+                    policy_layer_structure.append(value.shape[0])
+            if separate_value:
+                print(name)
+                print(value.shape[:])
+                if name.find('target/values_fn/vf/fc') > -1:
+                    if name.find('bias') > -1:
+                        value_layer_structure.append(value.shape[0])
+        
+        return policy_layer_structure, value_layer_structure
 
     @abstractmethod
     def get_parameter_list(self):

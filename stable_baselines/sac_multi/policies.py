@@ -144,8 +144,9 @@ class SACPolicy(BasePolicy):
     @abstractmethod
     def make_custom_actor(self, primitives, obs=None, reuse=False, scope="pi"):
         """
-        Creates an actor object
+        Creates an custom actor object
 
+        :param primitives: (dict) Obs/act information of primitives
         :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
         :param reuse: (bool) whether or not to reuse parameters
         :param scope: (str) the scope name of the actor
@@ -154,11 +155,12 @@ class SACPolicy(BasePolicy):
         raise NotImplementedError
 
     @abstractmethod
-    def make_custom_critics(self, primitives, obs=None, action=None, reuse=False,
+    def make_custom_critics(self, primitives, obs=None, action=None, separate_value=True, reuse=False,
                     scope="values_fn", create_vf=True, create_qf=True):
         """
-        Creates the two Q-Values approximator along with the Value function
+        Creates the two Q-Values approximator along with the custom Value function
 
+        :param primitives: (dict) Obs/act information of primitives
         :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
         :param action: (TensorFlow Tensor) The action placeholder
         :param reuse: (bool) whether or not to reuse parameters
@@ -318,6 +320,15 @@ class FeedForwardPolicy(SACPolicy):
         return self.qf1, self.qf2, self.value_fn
 
     def make_custom_actor(self, obs=None, primitives=None, reuse=False, scope="pi"):
+        """
+        Creates an custom actor object
+
+        :param primitives: (dict) Obs/act information of primitives
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name of the actor
+        :return: (TensorFlow Tensor) the output tensor
+        """
         if obs is None:
             obs = self.processed_obs
         mu_array = []
@@ -338,7 +349,7 @@ class FeedForwardPolicy(SACPolicy):
                     pi_h = tf.matmul(pi_h, seive_layer)
                     #------------- Observation seiving layer End -------------#
 
-                    pi_h = mlp(pi_h, item['layer'], self.activ_fn, layer_norm=self.layer_norm)
+                    pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
             else:
                 if isinstance(item, dict):
@@ -355,7 +366,7 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = tf.matmul(pi_h, seive_layer)
                         #------------- Observation seiving layer End -------------#
 
-                        pi_h = mlp(pi_h, item['layer'], self.activ_fn, layer_norm=self.layer_norm)
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         mu_array.append(mu_)
@@ -391,6 +402,18 @@ class FeedForwardPolicy(SACPolicy):
 
     def make_custom_critics(self, obs=None, action=None, primitives=None, separate_value=True, reuse=False, scope="values_fn",
                     create_vf=True, create_qf=True):
+        """
+        Creates the two Q-Values approximator along with the custom Value function
+
+        :param primitives: (dict) Obs/act information of primitives
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param action: (TensorFlow Tensor) The action placeholder
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name
+        :param create_vf: (bool) Whether to create Value fn or not
+        :param create_qf: (bool) Whether to create Q-Values fn or not
+        :return: ([tf.Tensor]) Mean, action and log probability
+        """
         if obs is None:
             obs = self.processed_obs
 
@@ -424,6 +447,55 @@ class FeedForwardPolicy(SACPolicy):
                     self.qf1 = qf1
                     self.qf2 = qf2
         else:
+            value_fn_accum = 0
+            qf1_accum = 0
+            qf2_accum = 0
+            for name, item in primitives.items():
+                if 'loaded' in name.split("/"):
+                    with tf.variable_scope(scope, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            critics_h = tf.layers.flatten(obs)
+
+                        #------------- Input observation seiving layer -------------#
+                        seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            seive_layer[item['obs'][1][i]][i] = 1
+                        critics_h = tf.matmul(critics_h, seive_layer)
+                        #------------- Observation seiving layer End -------------#
+
+                        if create_vf:
+                            # Value function
+                            with tf.variable_scope('vf' + "/" + name, reuse=reuse):
+                                vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                            value_fn_accum += value_fn
+
+                        if create_qf:
+                            #------------- Input action seiving layer -------------#
+                            seive_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
+                            for i in range(len(item['act'][1])):
+                                seive_layer[item['act'][1][i]][i] = 1
+                            qf_h = tf.matmul(action, seive_layer)
+                            #------------- Action seiving layer End -------------#
+                            
+                            # Concatenate preprocessed state and action
+                            qf_h = tf.concat([critics_h, qf_h], axis=-1)
+
+                            # Double Q values to reduce overestimation
+                            with tf.variable_scope('qf1' + "/" + name, reuse=reuse):
+                                qf1_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+
+                            with tf.variable_scope('qf2' + "/" + name, reuse=reuse):
+                                qf2_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+
+                            qf1_accum += qf1
+                            qf2_accum += qf2
+
             with tf.variable_scope(scope, reuse=reuse):
                 if self.feature_extraction == "cnn":
                     critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -435,7 +507,7 @@ class FeedForwardPolicy(SACPolicy):
                     with tf.variable_scope('vf', reuse=reuse):
                         vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
                         value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                    self.value_fn = value_fn
+                    self.value_fn = value_fn + value_fn_accum
 
                 if create_qf:
                     # Concatenate preprocessed state and action
@@ -450,8 +522,8 @@ class FeedForwardPolicy(SACPolicy):
                         qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
                         qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
 
-                    self.qf1 = qf1
-                    self.qf2 = qf2
+                    self.qf1 = qf1 + qf1_accum
+                    self.qf2 = qf2 + qf2_accum
 
         return self.qf1, self.qf2, self.value_fn
 
