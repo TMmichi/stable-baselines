@@ -337,7 +337,7 @@ class BaseRLModel(ABC):
             if add_value:
                 name_elem.insert(insert_index, primitive_name)
                 updated_name = '/'.join(name_elem)
-                print(updated_name)
+                print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
                 layer_param_dict[updated_name] = value
 
@@ -364,8 +364,6 @@ class BaseRLModel(ABC):
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
             if separate_value:
-                print(name)
-                print(value.shape[:])
                 if name.find('target/values_fn/vf/fc') > -1:
                     if name.find('bias') > -1:
                         value_layer_structure.append(value.shape[0])
@@ -406,8 +404,6 @@ class BaseRLModel(ABC):
         # placeholder and an assign op, and store them to
         # self.load_param_ops as dict of variable.name -> (placeholder, assign)
         loadable_parameters = self.get_parameter_list()
-        for item in loadable_parameters:
-            print("param: ",item)
 
         # Use OrderedDict to store order for backwards compatibility with
         # list-based params
@@ -417,6 +413,7 @@ class BaseRLModel(ABC):
                 placeholder = tf.placeholder(dtype=param.dtype, shape=param.shape)
                 # param.name is unique (tensorflow variables have unique names)
                 self._param_load_ops[param.name] = (placeholder, param.assign(placeholder))
+
 
     @abstractmethod
     def _get_pretrain_placeholders(self):
@@ -631,15 +628,15 @@ class BaseRLModel(ABC):
         # Keep track of not-updated variables
         not_updated_variables = set(self._param_load_ops.keys())
         for param_name, param_value in params.items():
-            print("param_name: ", param_name)
+            print("Loaded param: ",param_name)
             placeholder, assign_op = self._param_load_ops[param_name]
             feed_dict[placeholder] = param_value
             # Create list of tf.assign operations for sess.run
             param_update_ops.append(assign_op)
             # Keep track which variables are updated
             not_updated_variables.remove(param_name)
-
-        print("sess in base_class: ",self.sess)
+        for param_name in not_updated_variables:
+            print("Unloaded param: ", param_name)
 
         # Check that we updated all parameters if exact_match=True
         if exact_match and len(not_updated_variables) > 0:
@@ -1073,7 +1070,6 @@ class ActorCriticRLModel(BaseRLModel):
         return ret
 
     def get_parameter_list(self):
-        print("in get_parameter_list - ActorCritic")
         return self.params
 
     @abstractmethod
@@ -1141,6 +1137,7 @@ class OffPolicyRLModel(BaseRLModel):
                                                seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
         self.replay_buffer = replay_buffer
+        self.tensorboard_log = None
 
     @abstractmethod
     def setup_model(self):
@@ -1193,18 +1190,10 @@ class OffPolicyRLModel(BaseRLModel):
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
-        print("data: ",data)
+        
         # NOTE: Once loaded, type of policy is fixed
-        print("policy: ", data["policy"])
-        print("kwargs: ",kwargs)
         model.set_env(env)
         model.setup_model()
-        print("params type: ",type(params))
-        print("params keys: ",params.keys())
-        for name, value in params.items():
-            print("name: ",name)
-            print("value type: ", type(value))
-            print("value size: ", value.shape[:])
 
         model.load_parameters(params, exact_match=False)
 
@@ -1222,7 +1211,7 @@ class OffPolicyRLModel(BaseRLModel):
         """
         
         # model = SAC_MULTI
-        model = cls(policy=policy, env=None, _init_setup_model=False)
+        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs['tensorboard_log'])
 
         # Check the existence of 'train/weight' in primitives
         cls.weight_check(primitives)

@@ -366,11 +366,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Target entropy is used when learning the entropy coefficient
                     if self.target_entropy == 'auto':
-                        print("entropy: auto")
                         # automatically set target entropy if needed
                         self.target_entropy = -np.prod(self.action_space.shape).astype(np.float32)
                     else:
-                        print("entropy: man")
                         # Force conversion
                         # this will also throw an error for unexpected string
                         self.target_entropy = float(self.target_entropy)
@@ -379,7 +377,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     # see Automating Entropy Adjustment for Maximum Entropy RL section
                     # of https://arxiv.org/abs/1812.05905
                     if isinstance(self.ent_coef, str) and self.ent_coef.startswith('auto'):
-                        print("entropy_coef: auto")
                         # Default initial value of ent_coef when learned
                         init_value = 1.0
                         if '_' in self.ent_coef:
@@ -390,7 +387,6 @@ class SAC_MULTI(OffPolicyRLModel):
                                                             initializer=np.log(init_value).astype(np.float32))
                         self.ent_coef = tf.exp(self.log_ent_coef)
                     else:
-                        print("entropy_coef: fixed")
                         # Force conversion to float
                         # this will throw an error if a malformed string (different from 'auto')
                         # is passed
@@ -424,7 +420,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         ent_coef_loss = -tf.reduce_mean(
                             self.log_ent_coef * tf.stop_gradient(logp_pi + self.target_entropy))
                         entropy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    print("self.ent_coef: ",self.ent_coef)
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
@@ -449,11 +444,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                     # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
-                    var_list = tf_util.get_trainable_vars('model/train/weight')+tf_util.get_trainable_vars('model/pi/train')
-                    for var in var_list:
-                        print(var)
-                    print("policy_loss: ",policy_loss)
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=var_list)
+                    policy_var_list = tf_util.get_trainable_vars('model/train/weight')+tf_util.get_trainable_vars('model/pi/train')
+                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list, debug=True)
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -477,7 +469,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Control flow is used because sess.run otherwise evaluates in nondeterministic order
                     # and we first need to compute the policy action before computing q values losses
                     with tf.control_dependencies([policy_train_op]):
-                        train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
+                        train_values_op = value_optimizer.minimize(values_losses, var_list=values_params, debug=True)
 
                         self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss', 'entropy']
                         # All ops to call during one training step
