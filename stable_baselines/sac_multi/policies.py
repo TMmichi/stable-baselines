@@ -67,7 +67,6 @@ def apply_squashing_func(mu_, pi_, logp_pi):
 
 
 # TODO - Not done yet
-<<<<<<< HEAD
 def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
     """
     Fuse distributions of policy into a MCP fashion
@@ -79,35 +78,48 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     :param total_action_dimension: (int) Dimension of a total action
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
-    mu_MCP = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
-    for i in range(len(mu_array)):
-        weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
-        normed_weight_index = tf.divide(weight_tile_index, tf.exp(log_std_array[i]))
-        mu_weighted_i = mu_array[i] * normed_weight_index
-        for j in range(total_action_dimension):
-            append_idx = 0
-            if j in act_index[i]:
-                if j == 0:
-                    mu_temp = tf.reshape(mu_weighted_i[:][append_idx], [-1,1])
-                    std_temp = tf.reshape(normed_weight_index[:][append_idx], [-1,1])
+    with tf.variable_scope("fuse"):
+        print("weight:\t\t", weight)
+        mu_MCP = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
+        print("mu, std:\t", mu_MCP, std_sum)
+        for i in range(len(mu_array)):
+            weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            print("weight tile for primitive:\t{0}: ".format(i), weight_tile_index)
+            normed_weight_index = tf.divide(weight_tile_index, tf.exp(log_std_array[i]))
+            print("normed weight for primitive:\t{0}: ".format(i), normed_weight_index)
+            mu_weighted_i = mu_array[i] * normed_weight_index
+            print("weighted mu for primitive:\t{0}: ".format(i), mu_weighted_i)
+            for j in range(total_action_dimension):
+                append_idx = 0
+                if j in act_index[i]:
+                    print("In act index")
+                    if j == 0:
+                        mu_temp = tf.reshape(mu_weighted_i[:,append_idx], [-1,1], name="mu_temp")
+                        std_temp = tf.reshape(normed_weight_index[:,append_idx], [-1,1], name="std_temp")
+                    else:
+                        mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:,append_idx], [-1,1])], 1, name="mu_temp")
+                        std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,append_idx], [-1,1])], 1, name="std_temp")
+                    append_idx += 1
                 else:
-                    mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:][append_idx], [-1,1])], 1)
-                    std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:][append_idx], [-1,1])], 1)
-                append_idx += 1
-            else:
-                if j == 0:
-                    mu_temp = tf.reshape(mu_weighted_i[:]*0, [-1,1])
-                    std_temp = tf.reshape(normed_weight_index[:]*0, [-1,1])
-                else:
-                    mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:]*0, [-1,1])])
-                    std_temp = tf.concat([mu_temp, tf.reshape(normed_weight_index[:]*0, [-1,1])])
-            print(j, mu_temp, std_temp)
-        mu_MCP += mu_temp
-        std_sum += normed_weight_index
-    std_MCP = tf.math.reciprocal(std_sum)
-    mu_MCP = mu_MCP * std_MCP
-    pi_MCP = mu_MCP + tf.random_normal(tf.shape(mu_MCP)) * std_MCP
-    log_std_MCP = tf.log(std_MCP)
+                    print("Not in act index")
+                    if j == 0:
+                        mu_temp = tf.reshape(mu_weighted_i[:,0]*0, [-1,1], name="mu_temp")
+                        std_temp = tf.reshape(normed_weight_index[:,0]*0, [-1,1], name="std_temp")
+                    else:
+                        mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:,0]*0, [-1,1])], 1, name="mu_temp")
+                        std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,0]*0, [-1,1])], 1, name="std_temp")
+                print(j, mu_temp, std_temp)
+            mu_MCP += mu_temp
+            std_sum += std_temp
+        print("mu_MCP before std sum:\t",mu_MCP)
+        std_MCP = tf.math.reciprocal_no_nan(std_sum)
+        print("std_MCP after recip:\t",std_MCP)
+    mu_MCP = tf.math.multiply(mu_MCP, std_MCP, name="mu_MCP")
+    print("mu_MCP after std sum:\t",mu_MCP)
+    pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * std_MCP, name="pi_MCP")
+    print("pi_MCP:\t\t",pi_MCP)
+    log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
+    print("log_std_MCP:\t", log_std_MCP)
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -406,6 +418,7 @@ class FeedForwardPolicy(SACPolicy):
                         act_index.append(item['act'][1])
 
                     log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    print("log_std: ",log_std)
                     log_std_array.append(log_std)
                     
                     self.entropy += gaussian_entropy(log_std)

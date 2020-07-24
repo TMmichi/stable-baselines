@@ -128,10 +128,17 @@ class BaseRLModel(ABC):
             raise ValueError("Error: trying to replace the current environment with None")
 
         # sanity checking the environment
-        assert self.observation_space == env.observation_space, \
-            "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space.low, env.observation_space.low)
-        assert self.action_space == env.action_space, \
-            "Error: the environment passed must have at least the same action space as the model was trained on."
+        assert self.observation_space.shape == env.observation_space.shape, \
+            "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space, env.observation_space)
+        assert self.action_space.shape == env.action_space.shape, \
+            "Error: the environment passed must have at least the same action space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.action_space, env.action_space)
+        
+        if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
+            print()
+        if self.action_space.low != env.action_space.low and self.action_space.high != env.action_space.high:
+            print()
+        
+
         if self._requires_vec_env:
             assert isinstance(env, VecEnv), \
                 "Error: the environment passed is not a vectorized environment, however {} requires it".format(

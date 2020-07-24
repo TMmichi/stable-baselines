@@ -445,7 +445,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                     # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                     policy_var_list = tf_util.get_trainable_vars('model/train/weight')+tf_util.get_trainable_vars('model/pi/train')
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list, debug=True)
+                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -469,7 +469,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Control flow is used because sess.run otherwise evaluates in nondeterministic order
                     # and we first need to compute the policy action before computing q values losses
                     with tf.control_dependencies([policy_train_op]):
-                        train_values_op = value_optimizer.minimize(values_losses, var_list=values_params, debug=True)
+                        train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
 
                         self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss', 'entropy']
                         # All ops to call during one training step
