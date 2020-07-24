@@ -67,27 +67,48 @@ def apply_squashing_func(mu_, pi_, logp_pi):
 
 
 # TODO - Not done yet
-def fuse_networks_MCP(mu_array, log_std_array, weight):
-        """
-        Fuse distributions of policy into a MCP fashion
+def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
+    """
+    Fuse distributions of policy into a MCP fashion
 
-        :param mu_array: ([tf.Tensor]) List of means
-        :param log_std_array: ([tf.Tensor]) List of log of the standard deviations
-        :param weight: (tf.Tensor) Weight tensor of each primitives
-        :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
-        """
-        pi_MCP = mu_MCP = log_std_MCP = std_sum = 0
-        for i in range(len(mu_array)):
-            weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
-            normed_weight_index = tf.divide(weight_tile_index,tf.exp(log_std_array[i]))
-            mu_MCP += mu_array[i] * normed_weight_index
-            std_sum += normed_weight_index
-        std_MCP = tf.math.reciprocal(std_sum)
-        mu_MCP = mu_MCP * std_MCP
-        pi_MCP = mu_MCP + tf.random_normal(tf.shape(mu_MCP)) * std_MCP
-        log_std_MCP = tf.log(std_MCP)
-        return pi_MCP, mu_MCP, log_std_MCP
-
+    :param mu_array: ([tf.Tensor]) List of means
+    :param log_std_array: ([tf.Tensor]) List of log of the standard deviations
+    :param weight: (tf.Tensor) Weight tensor of each primitives
+    :param act_index: (list) List of action indices for each primitives
+    :param total_action_dimension: (int) Dimension of a total action
+    :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
+    """
+    mu_MCP = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
+    for i in range(len(mu_array)):
+        weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+        normed_weight_index = tf.divide(weight_tile_index, tf.exp(log_std_array[i]))
+        mu_weighted_i = mu_array[i] * normed_weight_index
+        for j in range(total_action_dimension):
+            append_idx = 0
+            if j in act_index[i]:
+                if j == 0:
+                    mu_temp = tf.reshape(mu_weighted_i[:][append_idx], [-1,1])
+                    std_temp = tf.reshape(normed_weight_index[:][append_idx], [-1,1])
+                else:
+                    mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:][append_idx], [-1,1])], 1)
+                    std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:][append_idx], [-1,1])], 1)
+                append_idx += 1
+            else:
+                if j == 0:
+                    mu_temp = tf.reshape(mu_weighted_i[:]*0, [-1,1])
+                    std_temp = tf.reshape(normed_weight_index[:]*0, [-1,1])
+                else:
+                    mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:]*0, [-1,1])])
+                    std_temp = tf.concat([mu_temp, tf.reshape(normed_weight_index[:]*0, [-1,1])])
+            print(j, mu_temp, std_temp)
+        mu_MCP += mu_temp
+        std_sum += normed_weight_index
+    std_MCP = tf.math.reciprocal(std_sum)
+    mu_MCP = mu_MCP * std_MCP
+    pi_MCP = mu_MCP + tf.random_normal(tf.shape(mu_MCP)) * std_MCP
+    log_std_MCP = tf.log(std_MCP)
+    
+    return pi_MCP, mu_MCP, log_std_MCP
 
 # TODO
 def fuse_networks_GMM(mu_array, log_std_array, weight):
@@ -324,12 +345,13 @@ class FeedForwardPolicy(SACPolicy):
 
         return self.qf1, self.qf2, self.value_fn
 
-    def make_custom_actor(self, obs=None, primitives=None, reuse=False, scope="pi"):
+    def make_custom_actor(self, obs=None, primitives=None, total_action_dimension=0, reuse=False, scope="pi"):
         """
         Creates an custom actor object
 
-        :param primitives: (dict) Obs/act information of primitives
         :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param primitives: (dict) Obs/act information of primitives
+        :param total_action_dimension: (int) Dimension of a total action
         :param reuse: (bool) whether or not to reuse parameters
         :param scope: (str) the scope name of the actor
         :return: (TensorFlow Tensor) the output tensor
@@ -338,6 +360,7 @@ class FeedForwardPolicy(SACPolicy):
             obs = self.processed_obs
         mu_array = []
         log_std_array = []
+        act_index = []
         self.entropy = 0
         for name, item in primitives.items():
             if name == 'train/weight':
@@ -379,6 +402,7 @@ class FeedForwardPolicy(SACPolicy):
                         # Important difference with SAC and other algo such as PPO:
                         # the std depends on the state, so we cannot use stable_baselines.common.distribution
                         log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        act_index.append(item['act'][1])
 
                     log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                     log_std_array.append(log_std)
@@ -391,7 +415,7 @@ class FeedForwardPolicy(SACPolicy):
                     raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be 'dict'.\033[0m".format(type(item)))
             
         # Reparameterization trick for MCP
-        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight)
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         self.std = tf.exp(log_std_MCP)
         self.policy_train = pi_MCP
