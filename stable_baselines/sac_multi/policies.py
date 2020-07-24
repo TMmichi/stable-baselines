@@ -77,9 +77,12 @@ def fuse_networks_MCP(mu_array, log_std_array, weight):
         :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
         """
         pi_MCP = mu_MCP = log_std_MCP = std_sum = 0
+
+        # len(mu_array) = number of primitives
+        # i = primitive index
         for i in range(len(mu_array)):
             weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
-            normed_weight_index = tf.divide(weight_tile_index,tf.exp(log_std_array[i]))
+        normed_weight_index = tf.divide(weight_tile_index,tf.exp(log_std_array[i]))
             mu_MCP += mu_array[i] * normed_weight_index
             std_sum += normed_weight_index
         std_MCP = tf.math.reciprocal(std_sum)
