@@ -1129,7 +1129,7 @@ class OffPolicyRLModel(BaseRLModel):
         If None, the number of cpu of the current machine will be used.
     """
 
-    def __init__(self, policy, env, replay_buffer=None, _init_setup_model=False, verbose=0, *,
+    def __init__(self, policy, env, replay_buffer=None, _init_setup_model=False, verbose=0, tensorboard_log=None,
                  requires_vec_env=False, policy_base=None,
                  policy_kwargs=None, seed=None, n_cpu_tf_sess=None):
         super(OffPolicyRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
