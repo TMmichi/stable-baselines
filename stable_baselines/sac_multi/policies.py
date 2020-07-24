@@ -67,6 +67,7 @@ def apply_squashing_func(mu_, pi_, logp_pi):
 
 
 # TODO - Not done yet
+<<<<<<< HEAD
 def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
     """
     Fuse distributions of policy into a MCP fashion
