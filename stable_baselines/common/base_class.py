@@ -341,10 +341,12 @@ class BaseRLModel(ABC):
                     insert_index = 3
                     add_value = True
             else:
-                pass
+                if primitive_name == None and 'weight' in name_elem:
+                    add_value = True
 
             if add_value:
-                name_elem.insert(insert_index, primitive_name)
+                if primitive_name:
+                    name_elem.insert(insert_index, primitive_name)
                 updated_name = '/'.join(name_elem)
                 print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
@@ -366,6 +368,8 @@ class BaseRLModel(ABC):
         obs_dim = len(obs[1])
         policy_layer_structure = []
         value_layer_structure = []
+        # if loaded for pretraining: model/pi/fc0/kernel:0
+        # if loaded for testing: model/pi/name_of_primitive/fc0/kernel:0
         for name, value in loaded_policy_dict.items():
             if name.find("pi/fc") > -1:
                 if name.find("fc0/kernel") > -1:
