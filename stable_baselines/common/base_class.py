@@ -133,10 +133,12 @@ class BaseRLModel(ABC):
         assert self.action_space.shape == env.action_space.shape, \
             "Error: the environment passed must have at least the same action space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.action_space, env.action_space)
         
-        if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
-            print()
+        print(self.observation_space.low, env.observation_space.low)
+        print(self.observation_space.high, env.observation_space.high)
+        """ if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
+            print(self.observation_space.low, env.observation_space.low)
         if self.action_space.low != env.action_space.low and self.action_space.high != env.action_space.high:
-            print()
+            print() """
         
 
         if self._requires_vec_env:
@@ -1218,7 +1220,7 @@ class OffPolicyRLModel(BaseRLModel):
         """
         
         # model = SAC_MULTI
-        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs['tensorboard_log'])
+        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs.get('tensorboard_log', None))
 
         # Check the existence of 'train/weight' in primitives
         cls.weight_check(primitives)
