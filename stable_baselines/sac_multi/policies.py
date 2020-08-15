@@ -391,7 +391,7 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation seiving layer End -------------#
 
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-                    weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                    self.weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
             else:
                 if isinstance(item, dict):
                     with tf.variable_scope(scope + "/" + name, reuse=reuse):
@@ -429,7 +429,7 @@ class FeedForwardPolicy(SACPolicy):
                     raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be 'dict'.\033[0m".format(type(item)))
             
         # Reparameterization trick for MCP
-        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, self.weight, act_index, total_action_dimension)
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         self.std = tf.exp(log_std_MCP)
         self.policy_train = pi_MCP
@@ -574,6 +574,9 @@ class FeedForwardPolicy(SACPolicy):
         if deterministic:
             return self.sess.run(self.deterministic_policy, {self.obs_ph: obs})
         return self.sess.run(self.policy, {self.obs_ph: obs})
+    
+    def get_weight(self, obs):
+        return self.sess.run(self.weight, {self.obs_ph: obs})
 
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})

@@ -312,8 +312,11 @@ class BaseRLModel(ABC):
             policy_layer_structure, value_layer_structure = cls.get_layer_structure((obs, act), param_dict, separate_value)
         else:
             raise TypeError("\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
-
-        primitive_dict[name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
+        
+        if name != None:
+            primitive_dict[name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
+        else:
+            primitive_dict["loaded"] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
 
     @staticmethod
     def loaded_policy_name_update(primitive_name, loaded_policy_dict, separate_value):
@@ -394,7 +397,7 @@ class BaseRLModel(ABC):
         """
         pass
 
-    def get_parameters(self):
+    def get_parameters(self, hierarchical=False):
         """
         Get current model parameters as dictionary of variable name -> ndarray.
 
@@ -402,7 +405,15 @@ class BaseRLModel(ABC):
         """
         parameters = self.get_parameter_list()
         parameter_values = self.sess.run(parameters)
-        return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+        if not hierarchical:
+            return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+        else:
+            # TODO: Change 'train' to 'freeze/loaded'
+            # for name in param.name:
+            #     name_list = name.split('.')
+            #     if 'train' in name_list:
+            #         updated_name = name_list.pop(name_list.find('train'))
+            return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
         return return_dictionary
 
     def _setup_load_operations(self):
@@ -1250,7 +1261,10 @@ class OffPolicyRLModel(BaseRLModel):
 
         :param primitives: (dict) obs/act/structure info of primitives
         '''
-        assert 'train/weight' in primitives.keys(), '\033[91m[ERROR]: No primitive name "train/weight". YOU MUST HAVE IT\033[0m'
+        if not 'loaded' in primitives.keys():
+            assert 'train/weight' in primitives.keys(), '\033[91m[ERROR]: No primitive name "train/weight". YOU MUST HAVE IT\033[0m'
+        else:
+            pass
     
     @staticmethod
     def range_primitive(primitives: dict) -> list:

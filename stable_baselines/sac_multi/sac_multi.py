@@ -736,12 +736,17 @@ class SAC_MULTI(OffPolicyRLModel):
             actions = actions[0]
 
         return actions, None
+    
+    def get_weight(self, observation):
+        observation = np.array(observation)
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        return self.policy_tf.get_weight(observation)
 
     def get_parameter_list(self):
         return (self.params +
                 self.target_params)
 
-    def save(self, save_path, cloudpickle=False):
+    def save(self, save_path, cloudpickle=False, hierarchical=False):
         data = {
             "learning_rate": self.learning_rate,
             "buffer_size": self.buffer_size,
@@ -769,6 +774,6 @@ class SAC_MULTI(OffPolicyRLModel):
             "policy_kwargs": self.policy_kwargs
         }
 
-        params_to_save = self.get_parameters()
+        params_to_save = self.get_parameters(hierarchical)
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
