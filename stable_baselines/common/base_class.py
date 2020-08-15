@@ -133,10 +133,12 @@ class BaseRLModel(ABC):
         assert self.action_space.shape == env.action_space.shape, \
             "Error: the environment passed must have at least the same action space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.action_space, env.action_space)
         
-        if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
-            print()
+        print(self.observation_space.low, env.observation_space.low)
+        print(self.observation_space.high, env.observation_space.high)
+        """ if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
+            print(self.observation_space.low, env.observation_space.low)
         if self.action_space.low != env.action_space.low and self.action_space.high != env.action_space.high:
-            print()
+            print() """
         
 
         if self._requires_vec_env:
@@ -339,10 +341,12 @@ class BaseRLModel(ABC):
                     insert_index = 3
                     add_value = True
             else:
-                pass
+                if primitive_name == None and 'weight' in name_elem:
+                    add_value = True
 
             if add_value:
-                name_elem.insert(insert_index, primitive_name)
+                if primitive_name:
+                    name_elem.insert(insert_index, primitive_name)
                 updated_name = '/'.join(name_elem)
                 print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
@@ -364,6 +368,8 @@ class BaseRLModel(ABC):
         obs_dim = len(obs[1])
         policy_layer_structure = []
         value_layer_structure = []
+        # if loaded for pretraining: model/pi/fc0/kernel:0
+        # if loaded for testing: model/pi/name_of_primitive/fc0/kernel:0
         for name, value in loaded_policy_dict.items():
             if name.find("pi/fc") > -1:
                 if name.find("fc0/kernel") > -1:
@@ -1218,7 +1224,7 @@ class OffPolicyRLModel(BaseRLModel):
         """
         
         # model = SAC_MULTI
-        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs['tensorboard_log'])
+        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs.get('tensorboard_log', None))
 
         # Check the existence of 'train/weight' in primitives
         cls.weight_check(primitives)

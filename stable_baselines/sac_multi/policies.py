@@ -91,8 +91,9 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             print("weighted mu for primitive:\t{0}: ".format(i), mu_weighted_i)
             for j in range(total_action_dimension):
                 append_idx = 0
+                print("Primitive Index ",j)
                 if j in act_index[i]:
-                    print("In act index")
+                    print("\tIn act index")
                     if j == 0:
                         mu_temp = tf.reshape(mu_weighted_i[:,append_idx], [-1,1], name="mu_temp")
                         std_temp = tf.reshape(normed_weight_index[:,append_idx], [-1,1], name="std_temp")
@@ -101,21 +102,20 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
                         std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,append_idx], [-1,1])], 1, name="std_temp")
                     append_idx += 1
                 else:
-                    print("Not in act index")
+                    print("\tNot in act index")
                     if j == 0:
                         mu_temp = tf.reshape(mu_weighted_i[:,0]*0, [-1,1], name="mu_temp")
                         std_temp = tf.reshape(normed_weight_index[:,0]*0, [-1,1], name="std_temp")
                     else:
                         mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:,0]*0, [-1,1])], 1, name="mu_temp")
                         std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,0]*0, [-1,1])], 1, name="std_temp")
-                print(j, mu_temp, std_temp)
+                print("\tMu_temp: ",mu_temp)
+                print("\tStd_temp: ", std_temp)
             mu_MCP += mu_temp
             std_sum += std_temp
-        print("mu_MCP before std sum:\t",mu_MCP)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
-        print("std_MCP after recip:\t",std_MCP)
     mu_MCP = tf.math.multiply(mu_MCP, std_MCP, name="mu_MCP")
-    print("mu_MCP after std sum:\t",mu_MCP)
+    print("mu_MCP:\t\t",mu_MCP)
     pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * std_MCP, name="pi_MCP")
     print("pi_MCP:\t\t",pi_MCP)
     log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
@@ -267,8 +267,8 @@ class FeedForwardPolicy(SACPolicy):
         self.cnn_extractor = cnn_extractor
         self.reuse = reuse
         if layers is None:
-            policy_layers = [128, 128]
-            value_layers = [256, 256, 128]
+            policy_layers = [32, 32]
+            value_layers = [32, 32]
         else:
             policy_layers = layers["policy"]
             value_layers = layers["value"]
