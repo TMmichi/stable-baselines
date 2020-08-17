@@ -280,15 +280,15 @@ class BaseRLModel(ABC):
                 obs_index.sort()
                 obs = (gym.spaces.Box(obs_range_array, obs_range_array, dtype=np.float32), obs_index)
             else:
-                raise TypeError("\033[91m[ERROR]: obs_range wrong type - Should be a list or an int. Received {0}\033[0m".format(type(obs_range)))
+                raise TypeError("\n\033[91m[ERROR]: obs_range wrong type - Should be a list or an int. Received {0}\033[0m".format(type(obs_range)))
             
             if isinstance(act_index, list):
-                assert act_dimension == len(act_index), '\033[91m[ERROR]: act_dimension mismatch with the length of act_index.\
+                assert act_dimension == len(act_index), '\n\033[91m[ERROR]: act_dimension mismatch with the length of act_index.\
                                                     act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_dimension, len(act_index))
             elif isinstance(act_index, int):
                 act_index = list(range(act_index))
             else:
-                raise TypeError("\033[91m[ERROR]: act_index wrong type, should be a list or an int. Received {0}\033[0m".format(type(act_index)))
+                raise TypeError("\n\033[91m[ERROR]: act_index wrong type, should be a list or an int. Received {0}\033[0m".format(type(act_index)))
             act_range_max = np.array([max(act_range)]*act_dimension)
             act_range_min = np.array([min(act_range)]*act_dimension)
             act_index.sort()
@@ -308,9 +308,9 @@ class BaseRLModel(ABC):
 
             obs_box = data_dict['observation_space']
             act_box = data_dict['action_space']
-            assert len(obs_index) == obs_box.shape[0], '\033[91m[ERROR]: Loaded observation dimension mismatch with length of obs_index.\
+            assert len(obs_index) == obs_box.shape[0], '\n\033[91m[ERROR]: Loaded observation dimension mismatch with length of obs_index.\
                                                     obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_box.shape[0], len(obs_index))
-            assert len(act_index) == act_box.shape[0], '\033[91m[ERROR]: Loaded action dimension mismatch with length of act_index.\
+            assert len(act_index) == act_box.shape[0], '\n\033[91m[ERROR]: Loaded action dimension mismatch with length of act_index.\
                                                     act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_box.shape[0], len(act_index))
             obs_index.sort()
             act_index.sort()
@@ -324,7 +324,7 @@ class BaseRLModel(ABC):
             primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
             policy_layer_structure, value_layer_structure = cls.get_layer_structure((obs, act), param_dict, separate_value)
         else:
-            raise TypeError("\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
+            raise TypeError("\n\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
         if name != None:
             primitive_dict[name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
@@ -416,17 +416,25 @@ class BaseRLModel(ABC):
 
         :return: (OrderedDict) Dictionary of variable name -> ndarray of model's parameters.
         """
-        parameters = self.get_parameter_list()
+        parameters = self.get_parameter_list() #self.params
         parameter_values = self.sess.run(parameters)
         if not hierarchical:
             return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
         else:
-            # TODO: Change 'train' to 'freeze/loaded'
-            # for name in param.name:
-            #     name_list = name.split('.')
-            #     if 'train' in name_list:
-            #         updated_name = name_list.pop(name_list.find('train'))
-            return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+            names = []
+            for param in parameters:
+                name_list = param.name.split('/')
+                if 'train' in name_list:
+                    name_list.remove('train')
+                    name = "/".join(name_list)
+                elif 'freeze' in name_list:
+                    name_list.remove('freeze')
+                    name_list.remove('loaded')
+                    name = "/".join(name_list)
+                else:
+                    name = param.name
+                names.append(name)
+            return_dictionary = OrderedDict((name, value) for name, value in zip(names, parameter_values))
         return return_dictionary
 
     def _setup_load_operations(self):

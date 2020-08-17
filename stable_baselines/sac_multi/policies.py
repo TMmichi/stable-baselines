@@ -11,6 +11,7 @@ EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
+debug = True
 
 
 def gaussian_likelihood(input_, mu_, log_std):
@@ -78,14 +79,23 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     :param total_action_dimension: (int) Dimension of a total action
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
+    if debug:
+        weight_nan = tf.where(tf.math.is_nan(weight))
+        weight_sum = tf.reduce_sum(weight,axis=0)
+        weight = tf.Print(weight,[tf.shape(weight), weight[0], weight_sum], "Weight shape/value[0]/sum = ")
+        weight = tf.Print(weight,[weight_nan], "Weight nan at = ")
+
     with tf.variable_scope("fuse"):
         print("")
         print("weight:\t\t", weight)
         mu_MCP = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         print("mu, std:\t", mu_MCP, std_sum)
         for i in range(len(mu_array)):
+            if debug:
+                mu_array[i] = tf.Print(mu_array[i],[mu_array[i][0]], "Mu value {0} = ".format(i))
+
             weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
-            normed_weight_index = tf.divide(weight_tile_index, tf.exp(log_std_array[i]))
+            normed_weight_index = tf.math.divide_no_nan(weight_tile_index, tf.exp(log_std_array[i]))
             mu_weighted_i = mu_array[i] * normed_weight_index
             for j in range(total_action_dimension):
                 append_idx = 0
@@ -113,10 +123,14 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             std_sum += std_temp
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
     mu_MCP = tf.math.multiply(mu_MCP, std_MCP, name="mu_MCP")
+    if debug:
+        mu_MCP = tf.Print(mu_MCP,[mu_MCP[0]],"mu_MCP = ")
     print("mu_MCP:\t\t",mu_MCP)
     pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * std_MCP, name="pi_MCP")
     print("pi_MCP:\t\t",pi_MCP)
-    log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
+    log_std_MCP = tf.log(tf.clip_by_value(std_MCP,1e-10, 1e10), name="log_std_MCP")
+    if debug:
+        log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP[0]],"log_std_MCP = ")
     print("log_std_MCP:\t", log_std_MCP)
     print("")
     
@@ -393,8 +407,9 @@ class FeedForwardPolicy(SACPolicy):
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     self.weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
             else:
+                # TODO: setup actor model recursively depending on the policy structure
+                # TODO: cases depends on weights
                 if name == 'loaded':
-                    
                     pass
                 else:
                     if isinstance(item, dict):
@@ -498,7 +513,8 @@ class FeedForwardPolicy(SACPolicy):
             qf1_accum = 0
             qf2_accum = 0
             for name, item in primitives.items():
-                if 'loaded' in name.split("/"):
+                # TODO: setup critics model recursively depending on the value structure
+                if 'loaded' in name.split("/") and 'loaded' != name:
                     with tf.variable_scope(scope, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)

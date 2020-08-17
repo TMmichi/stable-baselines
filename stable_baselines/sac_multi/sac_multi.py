@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.python import debug as tf_debug
 
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
@@ -255,7 +256,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
-                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
 
                     # Value train op
@@ -423,6 +424,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
+                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss = ")
+
 
                     # NOTE: in the original implementation, they have an additional
                     # regularization loss for the Gaussian parameters
