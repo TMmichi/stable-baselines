@@ -423,6 +423,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         entropy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
+                    # NOTE: logp_pi gets huge!!!
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
                     policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
                     policy_kl_loss = tf.Print(policy_kl_loss,[qf1_pi],"qf1_pi =\t")
