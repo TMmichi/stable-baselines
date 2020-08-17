@@ -424,7 +424,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
-                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss = ")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[qf1_pi],"qf1_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[self.ent_coef * logp_pi],"h*logp_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")
 
 
                     # NOTE: in the original implementation, they have an additional
@@ -601,8 +604,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
                     action = scale_action(self.action_space, unscaled_action)
+                    weight = [[0,0]]
                 else:
                     action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    weight = self.policy_tf.get_weight(obs[None])
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:
@@ -612,7 +617,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
-                new_obs, reward, done, info = self.env.step(unscaled_action)
+                new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
 
                 self.num_timesteps += 1
 

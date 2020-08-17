@@ -11,7 +11,7 @@ EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
-debug = True
+debug = False
 
 
 def gaussian_likelihood(input_, mu_, log_std):
