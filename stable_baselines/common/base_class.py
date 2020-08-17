@@ -244,12 +244,14 @@ class BaseRLModel(ABC):
             self.ep_info_buf = deque(maxlen=100)
 
     @classmethod
-    def construct_primitive_info(cls, name, primitive_dict, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], policy_layer_structure, loaded_policy=None, separate_value=True):
+    def construct_primitive_info(cls, name, primitive_dict, freeze, level, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], policy_layer_structure, loaded_policy=None, separate_value=True):
         '''
         Returns info of the primtive as a dictionary
 
         :param name: (str) name of the primitive
         :param primitive_dict: (dict) primitive dictionary in which to store data
+        :param freeze: (bool) primitive to be frozen at training time
+        :param level: (int) hierarchical level of the primitive
         :param obs_dimension: (int) observation space dimension for the primitive
         :param obs_range: ([float, float] or [int, int] or int) observation range. If int, then range fixed to 0
         :param obs_index: ([int, ...]) list of indices of the observation for the primitive
@@ -262,9 +264,12 @@ class BaseRLModel(ABC):
         :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
         '''
         if isinstance(loaded_policy, type(None)):
-            assert obs_dimension == len(obs_index), '\033[91m[ERROR]: obs_dimension mismatch with the length of obs_index.\
+            assert obs_dimension == len(obs_index), '\n\033[91m[ERROR]: obs_dimension mismatch with the length of obs_index.\
                                                     obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_dimension, len(obs_index))
-
+            assert not freeze, '\n\033[91m[ERROR]: Newly appointed primitive at training time cannot be frozen\033[0m'
+            assert name != None, '\n\033[91m[ERROR]: Newly appointed primitive should have its name designated\033[0m'
+            name = 'train/'+name
+            
             if isinstance(obs_range, list):
                 obs_range_max = np.array([max(obs_range)]*obs_dimension)
                 obs_range_min = np.array([min(obs_range)]*obs_dimension)
@@ -289,9 +294,17 @@ class BaseRLModel(ABC):
             act_index.sort()
             act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
             value_layer_structure = None
+
+            if name == 'train/weight':
+                print(obs[0].high)
             
         elif isinstance(loaded_policy, tuple):
             data_dict, param_dict = loaded_policy
+            if name != None:
+                if freeze:
+                    name = 'freeze/loaded/'+name
+                else:
+                    name = 'train/loaded'+name
 
             obs_box = data_dict['observation_space']
             act_box = data_dict['action_space']
@@ -303,12 +316,12 @@ class BaseRLModel(ABC):
             act_index.sort()
             obs = (obs_box, obs_index)
             act = (act_box, act_index)
+
             if 'pretrained_param' not in primitive_dict.keys():
                 primitive_dict['pretrained_param'] = [[],{}]
             updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict, separate_value)
             primitive_dict['pretrained_param'][0] += updated_name
             primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
-
             policy_layer_structure, value_layer_structure = cls.get_layer_structure((obs, act), param_dict, separate_value)
         else:
             raise TypeError("\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
