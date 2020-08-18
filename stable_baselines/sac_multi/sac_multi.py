@@ -424,10 +424,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     # NOTE: logp_pi gets huge!!!
+                    qf1_pi = tf.reshape(qf1_pi,[-1])
+                    logp_pi = tf.clip_by_value(logp_pi,-1e5, 1e5)
+                    
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
                     policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[qf1_pi],"qf1_pi =\t")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[self.ent_coef * logp_pi],"h*logp_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(qf1_pi),qf1_pi],"qf1_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi),self.ent_coef * logp_pi],"h*logp_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t", summarize=-1)
                     policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")
 
 
@@ -608,7 +612,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     weight = [[0,0]]
                 else:
                     action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    weight = self.policy_tf.get_weight(obs[None])
+                    weight = [[0,0]]
+                    #weight = self.policy_tf.get_weight(obs[None])
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:

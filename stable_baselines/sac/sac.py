@@ -223,6 +223,8 @@ class SAC(OffPolicyRLModel):
 
                     # Compute Q-Function loss
                     # TODO: test with huber loss (it would avoid too high values)
+                    q_backup = tf.Print(q_backup,[tf.shape(q_backup), tf.shape(qf1)], "q_backup, qf1 shape = ")
+                    q_backup = tf.Print(q_backup,[tf.shape((q_backup - qf1) ** 2), tf.shape(qf1)], "q_backup - qf1 shape = ")
                     qf1_loss = 0.5 * tf.reduce_mean((q_backup - qf1) ** 2)
                     qf2_loss = 0.5 * tf.reduce_mean((q_backup - qf2) ** 2)
 
@@ -236,12 +238,20 @@ class SAC(OffPolicyRLModel):
 
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
+                    qf1_pi = tf.reshape(qf1_pi,[-1])
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
+                    policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(qf1_pi),qf1_pi],"qf1_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(logp_pi),logp_pi],"logp_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi),self.ent_coef * logp_pi],"h*logp_pi =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")
 
                     # NOTE: in the original implementation, they have an additional
                     # regularization loss for the Gaussian parameters
                     # this is not used for now
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
+                    
                     policy_loss = policy_kl_loss
 
 
@@ -316,6 +326,9 @@ class SAC(OffPolicyRLModel):
                     self.sess.run(target_init_op)
 
                 self.summary = tf.summary.merge_all()
+
+    def setup_custom_model(self):
+        pass
 
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
