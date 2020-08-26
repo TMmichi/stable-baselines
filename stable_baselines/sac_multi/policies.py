@@ -280,8 +280,8 @@ class FeedForwardPolicy(SACPolicy):
         self.cnn_extractor = cnn_extractor
         self.reuse = reuse
         if layers is None:
-            policy_layers = [32, 32]
-            value_layers = [32, 32]
+            policy_layers = [64, 64]
+            value_layers = [64, 64]
         else:
             policy_layers = layers["policy"]
             value_layers = layers["value"]

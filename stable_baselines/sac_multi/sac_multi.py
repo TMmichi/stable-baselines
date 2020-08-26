@@ -60,8 +60,8 @@ class SAC_MULTI(OffPolicyRLModel):
         If None, the number of cpu of the current machine will be used.
     """
 
-    def __init__(self, policy, env, layers=None, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
-                 learning_starts=100, train_freq=1, batch_size=64,
+    def __init__(self, policy, env, layers=None, gamma=0.99, learning_rate=1e-4, buffer_size=50000,
+                 learning_starts=5000, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
                  gradient_steps=1, target_entropy='auto', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
@@ -84,7 +84,8 @@ class SAC_MULTI(OffPolicyRLModel):
         # self.vf_lr = learning_rate
         # Entropy coefficient / Entropy temperature
         # Inverse of the reward scale
-        self.ent_coef = ent_coef
+        #self.ent_coef = ent_coef
+        self.ent_coef = 1
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
         self.gamma = gamma
@@ -609,11 +610,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
                     action = scale_action(self.action_space, unscaled_action)
-                    weight = [[0,0]]
                 else:
                     action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    weight = [[0,0]]
-                    #weight = self.policy_tf.get_weight(obs[None])
+                    
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:
@@ -623,6 +622,8 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
+                #weight = [[0,0]]
+                weight = self.policy_tf.get_weight(obs[None])
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
 
                 self.num_timesteps += 1
