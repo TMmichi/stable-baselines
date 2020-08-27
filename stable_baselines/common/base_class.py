@@ -1256,7 +1256,7 @@ class OffPolicyRLModel(BaseRLModel):
         """
         
         # model = SAC_MULTI
-        model = cls(policy=policy, env=None, _init_setup_model=False, tensorboard_log=kwargs.get('tensorboard_log', None))
+        model = cls(policy=policy, env=None, _init_setup_model=False, **kwargs)
 
         # Check the existence of 'train/weight' in primitives
         cls.weight_check(primitives)

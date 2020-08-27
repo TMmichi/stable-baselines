@@ -84,8 +84,7 @@ class SAC_MULTI(OffPolicyRLModel):
         # self.vf_lr = learning_rate
         # Entropy coefficient / Entropy temperature
         # Inverse of the reward scale
-        #self.ent_coef = ent_coef
-        self.ent_coef = 1
+        self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
         self.gamma = gamma
@@ -417,6 +416,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Compute the entropy temperature loss
                     # it is used when the entropy coefficient is learned
+                    # NOTE: Why does it increase?
                     ent_coef_loss, entropy_optimizer = None, None
                     if not isinstance(self.ent_coef, float):
                         ent_coef_loss = -tf.reduce_mean(
@@ -426,13 +426,19 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                     # NOTE: logp_pi gets huge!!!
                     qf1_pi = tf.reshape(qf1_pi,[-1])
-                    logp_pi = tf.clip_by_value(logp_pi,-1e5, 1e5)
+                    logp_pi_mean = tf.reduce_mean(logp_pi)
+                    logp_pi_min = tf.math.reduce_min(logp_pi)
+                    logp_pi_max = tf.math.reduce_max(logp_pi)
+                    qf1_pi_mean = tf.reduce_mean(qf1_pi)
+                    qf1_pi_min = tf.math.reduce_min(qf1_pi)
+                    qf1_pi_max = tf.math.reduce_max(qf1_pi)
                     
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
                     policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[self.ent_coef, self.target_entropy],"alpha, target_ent =\t")
                     policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(qf1_pi),qf1_pi],"qf1_pi =\t")
                     policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi),self.ent_coef * logp_pi],"h*logp_pi =\t")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t", summarize=-1)
+                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t", summarize=3)
                     policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")
 
 
@@ -502,6 +508,12 @@ class SAC_MULTI(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('value_loss', value_loss)
                     tf.summary.scalar('entropy', self.entropy)
+                    tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
+                    tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
+                    tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
+                    tf.summary.scalar('1-1. logp_pi mean', logp_pi_mean)
+                    tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
+                    tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
                     '''
                     for name, value in primitives.items():
                         pi_data = tf_util.get_trainable_vars('model/pi/'+name)
@@ -513,6 +525,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     if ent_coef_loss is not None:
                         tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                         tf.summary.scalar('ent_coef', self.ent_coef)
+                        tf.summary.scalar('target_ent', self.target_entropy)
 
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
@@ -622,7 +635,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
-                #weight = [[0,0]]
+                #weight = [[0,0,0]]
                 weight = self.policy_tf.get_weight(obs[None])
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
 
