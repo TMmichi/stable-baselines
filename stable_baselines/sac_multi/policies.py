@@ -398,7 +398,8 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = tf.layers.flatten(obs)
                     
                     #------------- Input observation seiving layer -------------#
-                    seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                    #seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                    seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                     for i in range(len(item['obs'][1])):
                         seive_layer[item['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, seive_layer)
@@ -420,7 +421,8 @@ class FeedForwardPolicy(SACPolicy):
                                 pi_h = tf.layers.flatten(obs)
                             
                             #------------- Input observation seiving layer -------------#
-                            seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                            #seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                            seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                             for i in range(len(item['obs'][1])):
                                 seive_layer[item['obs'][1][i]][i] = 1
                             pi_h = tf.matmul(pi_h, seive_layer)
@@ -523,7 +525,8 @@ class FeedForwardPolicy(SACPolicy):
                             critics_h = tf.layers.flatten(obs)
 
                         #------------- Input observation seiving layer -------------#
-                        seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                        #seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
                             seive_layer[item['obs'][1][i]][i] = 1
                         critics_h = tf.matmul(critics_h, seive_layer)

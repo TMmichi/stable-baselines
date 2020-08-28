@@ -416,7 +416,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Compute the entropy temperature loss
                     # it is used when the entropy coefficient is learned
-                    # NOTE: Why does it increase?
                     ent_coef_loss, entropy_optimizer = None, None
                     if not isinstance(self.ent_coef, float):
                         ent_coef_loss = -tf.reduce_mean(
@@ -424,7 +423,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         entropy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
-                    # NOTE: logp_pi gets huge!!!
                     qf1_pi = tf.reshape(qf1_pi,[-1])
                     logp_pi_mean = tf.reduce_mean(logp_pi)
                     logp_pi_min = tf.math.reduce_min(logp_pi)
@@ -434,12 +432,13 @@ class SAC_MULTI(OffPolicyRLModel):
                     qf1_pi_max = tf.math.reduce_max(qf1_pi)
                     
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
+                    '''
                     policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
                     policy_kl_loss = tf.Print(policy_kl_loss,[self.ent_coef, self.target_entropy],"alpha, target_ent =\t")
                     policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(qf1_pi),qf1_pi],"qf1_pi =\t")
                     policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi),self.ent_coef * logp_pi],"h*logp_pi =\t")
                     policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t", summarize=3)
-                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")
+                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")'''
 
 
                     # NOTE: in the original implementation, they have an additional
@@ -635,8 +634,10 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
-                #weight = [[0,0,0]]
-                weight = self.policy_tf.get_weight(obs[None])
+                try:
+                    weight = self.policy_tf.get_weight(obs[None])
+                except Exception:
+                    weight = [[0,0,0]]
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
 
                 self.num_timesteps += 1
