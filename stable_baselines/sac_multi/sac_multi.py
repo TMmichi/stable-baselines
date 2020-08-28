@@ -578,7 +578,7 @@ class SAC_MULTI(OffPolicyRLModel):
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
     def learn(self, total_timesteps, callback=None,
-              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, replay_wrapper=None):
+              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, replay_wrapper=None, save_interval=0, save_path=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
@@ -719,6 +719,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
 
                 num_episodes = len(episode_rewards)
+
+                if save_interval and save_path != None:
+                    if step % save_interval == 0 and step:
+                        self.save(save_path+"/policy_"+str(step))
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
