@@ -327,9 +327,6 @@ class SAC(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def setup_custom_model(self):
-        pass
-
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
