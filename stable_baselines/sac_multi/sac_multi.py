@@ -432,21 +432,12 @@ class SAC_MULTI(OffPolicyRLModel):
                     qf1_pi_max = tf.math.reduce_max(qf1_pi)
                     
                     policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
-                    '''
-                    policy_kl_loss = tf.Print(policy_kl_loss,[],"\n")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[self.ent_coef, self.target_entropy],"alpha, target_ent =\t")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(qf1_pi),qf1_pi],"qf1_pi =\t")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi),self.ent_coef * logp_pi],"h*logp_pi =\t")
-                    policy_kl_loss = tf.Print(policy_kl_loss,[tf.shape(self.ent_coef * logp_pi - qf1_pi),self.ent_coef * logp_pi - qf1_pi],"KL_index =\t", summarize=3)
-                    policy_kl_loss = tf.Print(policy_kl_loss,[policy_kl_loss],"KL loss =\t")'''
-
 
                     # NOTE: in the original implementation, they have an additional
                     # regularization loss for the Gaussian parameters
                     # this is not used for now
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
                     policy_loss = policy_kl_loss
-
 
                     # Target for value fn regression
                     # We update the vf towards the min of two Q-functions in order to
@@ -797,6 +788,8 @@ class SAC_MULTI(OffPolicyRLModel):
             "verbose": self.verbose,
             "observation_space": self.observation_space,
             "action_space": self.action_space,
+            "obs_space_by_name": self.obs_space_by_name,
+            "act_space_by_name": self.act_space_by_name,
             "policy": self.policy,
             "n_envs": self.n_envs,
             "n_cpu_tf_sess": self.n_cpu_tf_sess,

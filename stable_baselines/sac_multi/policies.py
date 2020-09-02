@@ -408,46 +408,41 @@ class FeedForwardPolicy(SACPolicy):
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     self.weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
             else:
-                # TODO: setup actor model recursively depending on the policy structure
-                # TODO: cases depends on weights
-                if name == 'loaded':
+                if isinstance(item, dict):
+                    with tf.variable_scope(scope + "/" + name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation seiving layer -------------#
+                        #seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
+                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            seive_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, seive_layer)
+                        #------------- Observation seiving layer End -------------#
+
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+
+                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        mu_array.append(mu_)
+
+                        # Important difference with SAC and other algo such as PPO:
+                        # the std depends on the state, so we cannot use stable_baselines.common.distribution
+                        log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        act_index.append(item['act'][1])
+
+                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    print("log_std: ",log_std)
+                    log_std_array.append(log_std)
+                    
+                    self.entropy += gaussian_entropy(log_std)
+                elif isinstance(item, list):
+                    # primitive['pretrained_param']
                     pass
                 else:
-                    if isinstance(item, dict):
-                        with tf.variable_scope(scope + "/" + name, reuse=reuse):
-                            if self.feature_extraction == "cnn":
-                                pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                            else:
-                                pi_h = tf.layers.flatten(obs)
-                            
-                            #------------- Input observation seiving layer -------------#
-                            #seive_layer = np.zeros([item['obs'][0].shape[0], len(item['obs'][1])], dtype=np.float32)
-                            seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                            for i in range(len(item['obs'][1])):
-                                seive_layer[item['obs'][1][i]][i] = 1
-                            pi_h = tf.matmul(pi_h, seive_layer)
-                            #------------- Observation seiving layer End -------------#
-
-                            pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-
-                            mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
-                            mu_array.append(mu_)
-
-                            # Important difference with SAC and other algo such as PPO:
-                            # the std depends on the state, so we cannot use stable_baselines.common.distribution
-                            log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
-                            act_index.append(item['act'][1])
-
-                        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        print("log_std: ",log_std)
-                        log_std_array.append(log_std)
-                        
-                        self.entropy += gaussian_entropy(log_std)
-                    elif isinstance(item, list):
-                        # primitive['pretrained_param']
-                        pass
-                    else:
-                        raise TypeError("\033[91m[ERROR]: Primitive type error. Received: {0}, Should be 'dict'.\033[0m".format(type(item)))
+                    raise TypeError("\n\033[91m[ERROR]: Primitive type error. Received: {0}, Should be 'dict'.\033[0m".format(type(item)))
             
         # Reparameterization trick for MCP
         pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, self.weight, act_index, total_action_dimension)
