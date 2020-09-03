@@ -38,10 +38,11 @@ class BaseRLModel(ABC):
         results, you must set `n_cpu_tf_sess` to 1.
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
+    :param composite_primitive_name: (str) Name of the composite primitive. If None, will have no effect.
     """
 
     def __init__(self, policy, env, verbose=0, *, requires_vec_env, policy_base,
-                 policy_kwargs=None, seed=None, n_cpu_tf_sess=None):
+                 policy_kwargs=None, seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
         if isinstance(policy, str) and policy_base is not None:
             self.policy = get_policy_from_name(policy_base, policy)
         else:
@@ -52,6 +53,8 @@ class BaseRLModel(ABC):
         self.policy_kwargs = {} if policy_kwargs is None else policy_kwargs
         self.observation_space = None
         self.action_space = None
+        self.observation_index = None
+        self.action_index = None
         self.obs_space_by_name = None
         self.act_space_by_name = None
         self.n_envs = None
@@ -65,6 +68,9 @@ class BaseRLModel(ABC):
         self.n_cpu_tf_sess = n_cpu_tf_sess
         self.episode_reward = None
         self.ep_info_buf = None
+        self.composite_primitive_name = composite_primitive_name
+        self.primitives = OrderedDict()
+        self.top_hierarchy_level = 0
 
         if env is not None:
             print("env is not none")
@@ -130,18 +136,10 @@ class BaseRLModel(ABC):
             raise ValueError("Error: trying to replace the current environment with None")
 
         # sanity checking the environment
-        assert self.observation_space.shape == env.observation_space.shape, \
+        assert self.observation_space == env.observation_space, \
             "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space, env.observation_space)
-        assert self.action_space.shape == env.action_space.shape, \
+        assert self.action_space == env.action_space, \
             "Error: the environment passed must have at least the same action space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.action_space, env.action_space)
-        
-        print(self.observation_space.low, env.observation_space.low)
-        print(self.observation_space.high, env.observation_space.high)
-        """ if self.observation_space.low != env.observation_space.low and self.observation_space.high != env.observation_space.high:
-            print(self.observation_space.low, env.observation_space.low)
-        if self.action_space.low != env.action_space.low and self.action_space.high != env.action_space.high:
-            print() """
-        
 
         if self._requires_vec_env:
             assert isinstance(env, VecEnv), \
@@ -241,39 +239,50 @@ class BaseRLModel(ABC):
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
 
-    @classmethod
-    def construct_primitive_info(cls, name, primitive_dict, freeze, level, obs_dimension, obs_range: Union[str, list], obs_index, act_dimension, act_range, act_index: Union[str, list], policy_layer_structure, loaded_policy=None, separate_value=True):
+    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, policy_layer_structure, loaded_policy=None, separate_value=True):
         # TODO 1: Store level of the top hierarchy
+        # TODO 2: Check if there exists same name @ top level of hierarchy
+        # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
+        # TODO 3-2: else -> check wheter given name is identical to the name of the weight of the submodule
         '''
         Returns info of the primtive as a dictionary
 
         :param name: (str) name of the primitive
-        :param primitive_dict: (dict) primitive dictionary in which to store data
         :param freeze: (bool) primitive to be frozen at training time
         :param level: (int) hierarchical level of the primitive
-        :param obs_dimension: (int) observation space dimension for the primitive
         :param obs_range: ([float, float] or [int, int] or int) observation range. If int, then range fixed to 0
         :param obs_index: ([int, ...]) list of indices of the observation for the primitive
-        :param act_dimension: (int) action space dimension for the primitive
-        :param act_range: ([float, float] or [int, int]) action range
-        :param act_index: ([int, ...] or int) list of indices of the action for the primitive. If int, then action_index_array = [0:act_index]
+        :param act_range: ([float, float] or [int, int] or int) action range. If int, then all dimensions of the range fixed to [0,1]
+        :param act_index: ([int, ...]) list of indices of the action for the primitive.
         :param policy_layer_structure: ([int, ...]) hidden layer structure of the primitive policy
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
         :param separate_value: (bool) Use separate value network
         :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
         '''
         if isinstance(loaded_policy, type(None)):
-            assert obs_dimension == len(obs_index), \
-                '\n\t\033[91m[ERROR]: obs_dimension mismatch with the length of obs_index. obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_dimension, len(obs_index))
             assert not freeze, \
                 '\n\t\033[91m[ERROR]: Newly appointed primitive at training time cannot be frozen\033[0m'
             assert name != None, \
                 '\n\t\033[91m[ERROR]: Newly appointed primitive should have its name designated\033[0m'
-            name = 'train/level'+str(level)+name
+            layer_name_list = ['train','level'+str(level)+'_'+name]
+            primitive_name_list = ['level'+str(level)+'_'+name]
+            if name == 'weight':
+                self.top_hierarchy_level = level
+                layer_name_list.insert(-1,self.composite_primitive_name)
+                primitive_name_list.insert(-1,self.composite_primitive_name)
+            layer_name = '/'.join(layer_name_list)
+            primitive_name = '/'.join(primitive_name_list)
             
-            if isinstance(obs_range, list):
-                obs_range_max = np.array([max(obs_range)]*obs_dimension)
-                obs_range_min = np.array([min(obs_range)]*obs_dimension)
+            obs_dimension = len(obs_index)
+            if isinstance(obs_range, dict):
+                assert 'min' in obs_range.keys() and 'max' in obs_range.keys(), \
+                    '\n\t\033[91m[ERROR]: No keys named "min" or "max" within the obs_range.\033[0m'
+                assert len(obs_range['min']) == len(obs_range['max']), \
+                    '\n\t\033[91m[ERROR]: Length of minimum obs_range and maximum obs_range differs.\033[0m'
+                assert len(obs_range['min']) == obs_dimension, \
+                    '\n\t\033[91m[ERROR]: length of obs_range differs with the length of obs_index.\033[0m'
+                obs_range_max = np.array(obs_range['max'])
+                obs_range_min = np.array(obs_range['min'])
                 obs_index.sort()
                 obs = (gym.spaces.Box(obs_range_min, obs_range_max, dtype=np.float32), obs_index)
             elif isinstance(obs_range, int):
@@ -281,31 +290,43 @@ class BaseRLModel(ABC):
                 obs_index.sort()
                 obs = (gym.spaces.Box(obs_range_array, obs_range_array, dtype=np.float32), obs_index)
             else:
-                raise TypeError("\n\t\033[91m[ERROR]: obs_range wrong type - Should be a list or an int. Received {0}\033[0m".format(type(obs_range)))
+                raise TypeError("\n\t\033[91m[ERROR]: obs_range wrong type - Should be a dict or an int. Received {0}\033[0m".format(type(obs_range)))
             
-            if isinstance(act_index, list):
-                assert act_dimension == len(act_index), \
-                    '\n\t\033[91m[ERROR]: act_dimension mismatch with the length of act_index. act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_dimension, len(act_index))
-            elif isinstance(act_index, int):
-                act_index = list(range(act_index))
+            act_dimension = len(act_index)
+            if isinstance(act_range, dict):
+                assert 'min' in act_range.keys() and 'max' in act_range.keys(), \
+                    '\n\t\033[91m[ERROR]: No keys named "min" or "max" within the act_range.\033[0m'
+                assert len(act_range['min']) == len(act_range['max']), \
+                    '\n\t\033[91m[ERROR]: Length of the minimum act_range and the maximum act_range differs.\033[0m'
+                assert len(act_range['min']) == act_dimension, \
+                    '\n\t\033[91m[ERROR]: Length of the act_range differs with the length of act_index.\033[0m'
+                act_range_max = np.array(act_range['max'])
+                act_range_min = np.array(act_range['min'])
+                act_index.sort()
+                act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
+            elif isinstance(act_range, int):
+                act_range_max = np.array([1]*act_dimension)
+                act_range_min = np.array([0]*act_dimension)
+                act_index.sort()
+                act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
             else:
-                raise TypeError("\n\t\033[91m[ERROR]: act_index wrong type, should be a list or an int. Received {0}\033[0m".format(type(act_index)))
-
-            act_range_max = np.array([max(act_range)]*act_dimension)
-            act_range_min = np.array([min(act_range)]*act_dimension)
-            act_index.sort()
-            act = (gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32), act_index)
+                raise TypeError("\n\t\033[91m[ERROR]: act_index wrong type, should be a dict or an int. Received {0}\033[0m".format(type(act_index)))
+            # TODO: implement value_layer_structure
             value_layer_structure = None
             
         elif isinstance(loaded_policy, tuple):
-            data_dict, param_dict = loaded_policy
-            #print(data_dict)
-            print(data_dict['observation_space'])
-            print(vars(data_dict['observation_space']))
-            quit()
-            name_list = ['freeze' if freeze else 'train','loaded','level'+str(level),name]
-            name = '/'.join(name_list)
+            layer_name_list = ['freeze' if freeze else 'train','loaded','level'+str(level)+'_'+name]
+            primitive_name_list = ['level'+str(level)+'_'+name]
+            if level == 1:
+                layer_name_list.append('level0')
+                primitive_name_list.append('level0')
+            layer_name = '/'.join(layer_name_list)
+            primitive_name = '/'.join(primitive_name_list)
 
+            # TODO: Recursive decomposition of the loaded policy from data_dict
+            data_dict, param_dict = loaded_policy
+            
+            # TODO: Recursive acquisition of obs/act box of decomposed policy
             obs_box = data_dict['observation_space']
             act_box = data_dict['action_space']
             assert len(obs_index) == obs_box.shape[0], \
@@ -317,23 +338,23 @@ class BaseRLModel(ABC):
             obs = (obs_box, obs_index)
             act = (act_box, act_index)
 
-            if 'pretrained_param' not in primitive_dict.keys():
-                primitive_dict['pretrained_param'] = [[],{}]
-            updated_name, updated_param_dict = cls.loaded_policy_name_update(name, param_dict, separate_value)
-            primitive_dict['pretrained_param'][0] += updated_name
-            primitive_dict['pretrained_param'][1] = {**primitive_dict['pretrained_param'][1], **updated_param_dict}
-            policy_layer_structure, value_layer_structure = cls.get_layer_structure((obs, act), param_dict, separate_value)
+            if 'pretrained_param' not in self.primitives.keys():
+                self.primitives['pretrained_param'] = [[],{}]
+            updated_layer_name, updated_param_dict = self.loaded_policy_name_update(layer_name, param_dict, separate_value)
+            self.primitives['pretrained_param'][0] += updated_layer_name
+            self.primitives['pretrained_param'][1] = {**self.primitives['pretrained_param'][1], **updated_param_dict}
+            policy_layer_structure, value_layer_structure = self.get_layer_structure((obs, act), param_dict, separate_value)
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        primitive_dict[name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}}
+        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name}
         
     @staticmethod
-    def loaded_policy_name_update(primitive_name, loaded_policy_dict, separate_value):
+    def loaded_policy_name_update(layer_name, loaded_policy_dict, separate_value):
         '''
         Concatenate name of each layers with name of the primitive
 
-        :param name: (str) name of the primitive
+        :param name: (str) name of the primitive layer
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
         :param separate_value: (bool) Use separate value network
         :return: (list, dict) List consisting names of layers with specified primitive
@@ -355,12 +376,12 @@ class BaseRLModel(ABC):
                     insert_index = 3
                     add_value = True
             else:
-                if primitive_name == None and 'weight' in name_elem:
+                if layer_name == None and 'weight' in name_elem:
                     add_value = True
 
             if add_value:
-                if primitive_name:
-                    name_elem.insert(insert_index, primitive_name)
+                if layer_name:
+                    name_elem.insert(insert_index, layer_name)
                 updated_name = '/'.join(name_elem)
                 print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
@@ -370,6 +391,7 @@ class BaseRLModel(ABC):
 
     @staticmethod
     def get_layer_structure(argument_tuple, loaded_policy_dict, separate_value):
+        # TODO: Change target/values_fn ~~
         '''
         Return layer structure of the policy/value from parameter dictionary
 
@@ -718,19 +740,113 @@ class BaseRLModel(ABC):
         """
         raise NotImplementedError()
 
-    @classmethod
-    @abstractmethod
-    def pretrainer_load(cls, policy, primitives, env, **kwargs):
+    @staticmethod
+    def pretrainer_load(model, policy, env, separate_value=True, **kwargs):
         """
         Construct trainer from policy structure
 
-        :param policy: (Policy Class) class of SAC policy
+        :param model: (Algorithm Class) class of an Algorithm which includes primitives dictionary as a member variable
+        :param policy: (BasePolicy) Policy object
         :param primitives: (dict) primitives by name to which items assigned as an info of obs/act/layer_structure
         :param env: (Gym Environment) the new environment to run the loaded model on
         :param kwargs: extra arguments to change the model when loading
         """
-        #raise NotImplementedError()
-        pass
+        # Check the existence of 'train/weight' in primitives
+        model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+        
+        # get total_obs_bound, total_act_bound
+        ranges = model.range_primitive(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+        # obs_by_name = {'name_of_primitive1':{'box':gym.space.Box(),'obs_index':[]}, \
+        #                'name_of_primitive2':{'box':gym.space.Box(),'obs_index':[]}, \ 
+        #                                       ..., 
+        #                'name_of_primitiven':{'box':gym.space.Box(),'obs_index':[]}
+        #               }
+        # act_by_name = {'name_of_primitive1':{'box':gym.space.Box(),'act_index':[]}, \
+        #                'name_of_primitive2':{'box':gym.space.Box(),'act_index':[]}, \ 
+        #                                       ..., 
+        #                'name_of_primitiven':{'box':gym.space.Box(),'act_index':[]}
+        #               }
+        data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
+                'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32), \
+                'observation_index': [], \
+                'action_index': [],\
+                'obs_space_by_name': [], \
+                'act_space_by_name': []
+                }
+        
+        model.__dict__.update(kwargs)
+        model.__dict__.update(data)
+        
+        model.set_env(env)
+        try:
+            model.setup_custom_model(model.primitives, separate_value)
+        except Exception as e:
+            print(e)
+            raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.\033[0m")
+
+        model.load_parameters(model.primitives['pretrained_param'][1], exact_match=False)
+
+        return model
+    
+    @staticmethod
+    def weight_check(primitives: dict, composite_primitive_name: str, level: int):
+        # TODO: Change train/weight
+        '''
+        Check the existence of 'train/weight' in primitive dict
+
+        :param primitives: (dict) obs/act/structure info of primitives
+        '''
+        assert composite_primitive_name+'/level'+str(level)+'_weight' in primitives.keys(), \
+            '\n\t\033[91m[ERROR]: No weight at the top level hierarchy. YOU MUST HAVE IT\033[0m'
+    
+    @staticmethod
+    def range_primitive(primitives: dict, composite_primitive_name: str, level: int) -> list:
+        # TODO: Change train/weight
+        '''
+        Return range bounds of total observation/action space
+
+        :param primitives: (dict) obs/act/structure info of primitives
+        :return: ([2x2 np.array]): 
+            dims[0][0] = obs min np.array, dims[0][1] = obs max np.array
+            dims[1][0] = act min np.array, dims[1][1] = act max np.array
+        '''
+        weight_name = composite_primitive_name+'/level'+str(level)+'_weight'
+        obs_dim = primitives[weight_name]['obs'][1][-1] + 1  # dimension = last index + 1
+        obs_min_array = np.array([-float('inf')]*obs_dim)
+        obs_max_array = np.array([float('inf')]*obs_dim)
+
+        act_dim = 0
+        for name, info_dict in primitives.items():
+            if name not in  [weight_name, 'pretrained_param']:
+                act_dim = max(act_dim, info_dict['act'][1][-1]+1)
+        act_min_array = np.array([-float('inf')]*act_dim)
+        act_max_array = np.array([float('inf')]*act_dim)
+
+        for name, info_dict in primitives.items():
+            # TODO: differenciate min/max bounds of each dimension of obs/act within a single primitive
+            if name not in [weight_name, 'pretrained_param']:
+                for i, idx in enumerate(info_dict['obs'][1]):
+                    obs_min_prim = info_dict['obs'][0].low[i]
+                    obs_max_prim = info_dict['obs'][0].high[i]
+                    if obs_min_array[idx] not in [-float('inf'), obs_min_prim]:
+                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} min bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_min_array[idx], obs_min_prim, idx))
+                    obs_min_array[idx] = obs_min_prim
+                    if obs_max_array[idx] not in [float('inf'), obs_max_prim]:
+                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_max_array[idx], obs_max_prim, idx))
+                    obs_max_array[idx] = obs_max_prim
+                for i, idx in enumerate(info_dict['act'][1]):
+                    act_min_prim = info_dict['act'][0].low[i]
+                    act_max_prim = info_dict['act'][0].high[i]
+                    if act_min_array[idx] not in [-float('inf'), act_min_prim]:
+                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} min bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_min_array[idx], act_min_prim, idx))
+                    act_min_array[idx] = act_min_prim
+                    if act_max_array[idx] not in [float('inf'), act_max_prim]:
+                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} max bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_max_array[idx], act_max_prim, idx))
+                    act_max_array[idx] = act_max_prim
+            ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
+
+        return ranges
+
 
     @staticmethod
     def _save_to_file_cloudpickle(save_path, data=None, params=None):
@@ -1175,10 +1291,10 @@ class OffPolicyRLModel(BaseRLModel):
 
     def __init__(self, policy, env, replay_buffer=None, _init_setup_model=False, verbose=0, tensorboard_log=None,
                  requires_vec_env=False, policy_base=None,
-                 policy_kwargs=None, seed=None, n_cpu_tf_sess=None):
+                 policy_kwargs=None, seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
         super(OffPolicyRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
                                                policy_base=policy_base, policy_kwargs=policy_kwargs,
-                                               seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
+                                               seed=seed, n_cpu_tf_sess=n_cpu_tf_sess, composite_primitive_name=composite_primitive_name)
 
         self.replay_buffer = replay_buffer
         self.tensorboard_log = None
@@ -1238,98 +1354,6 @@ class OffPolicyRLModel(BaseRLModel):
         model.load_parameters(params, exact_match=False)
 
         return model
-
-    @classmethod
-    def pretrainer_load(cls, policy, primitives, env, separate_value=True, **kwargs):
-        """
-        Construct trainer from policy structure
-
-        :param policy: (Policy Class) class of SAC policy
-        :param primitives: (dict) primitives by name to which items assigned as an info of obs/act/layer_structure
-        :param env: (Gym Environment) the new environment to run the loaded model on
-        :param kwargs: extra arguments to change the model when loading
-        """
-        
-        # model = SAC_MULTI
-        model = cls(policy=policy, env=None, _init_setup_model=False, **kwargs)
-
-        # Check the existence of 'train/weight' in primitives
-        cls.weight_check(primitives)
-        
-        # get total_obs_bound, total_act_bound
-        ranges = cls.range_primitive(primitives)
-        data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
-                'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32), \
-                'obs_space_by_name': [], \
-                'act_space_by_name': []}
-        model.__dict__.update(data)
-        model.__dict__.update(kwargs)
-        
-        model.set_env(env)
-        try:
-            model.setup_custom_model(primitives, separate_value)
-        except Exception:
-            raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.")
-
-        model.load_parameters(primitives['pretrained_param'][1], exact_match=False)
-
-        return model
-    
-    @staticmethod
-    def weight_check(primitives: dict):
-        '''
-        Check the existence of 'train/weight' in primitive dict
-
-        :param primitives: (dict) obs/act/structure info of primitives
-        '''
-        assert 'train/weight' in primitives.keys(), \
-            '\n\t\033[91m[ERROR]: No primitive name "train/weight". YOU MUST HAVE IT\033[0m'
-    
-    @staticmethod
-    def range_primitive(primitives: dict) -> list:
-        '''
-        Return range bounds of total observation/action space
-
-        :param primitives: (dict) obs/act/structure info of primitives
-        :return: ([2x2 np.array]): 
-            dims[0][0] = obs min np.array, dims[0][1] = obs max np.array
-            dims[1][0] = act min np.array, dims[1][1] = act max np.array
-        '''
-        obs_dim = primitives['train/weight']['obs'][1][-1] + 1  # dimension = last index + 1
-        obs_min_array = np.array([-float('inf')]*obs_dim)
-        obs_max_array = np.array([float('inf')]*obs_dim)
-
-        act_dim = 0
-        for name, info_dict in primitives.items():
-            if name not in  ['train/weight', 'pretrained_param']:
-                act_dim = max(act_dim, info_dict['act'][1][-1]+1)
-        act_min_array = np.array([-float('inf')]*act_dim)
-        act_max_array = np.array([float('inf')]*act_dim)
-
-        for name, info_dict in primitives.items():
-            # TODO: differenciate min/max bounds of each dimension of obs/act within a single primitive
-            if name not in ['train/weight', 'pretrained_param']:
-                obs_min_prim = info_dict['obs'][0].low.min()
-                obs_max_prim = info_dict['obs'][0].high.max()
-                act_min_prim = info_dict['act'][0].low.min()
-                act_max_prim = info_dict['act'][0].high.max()
-                for idx in info_dict['obs'][1]:
-                    if obs_min_array[idx] not in [-float('inf'), obs_min_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite min bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_min_array[idx], obs_min_prim))
-                    obs_min_array[idx] = obs_min_prim
-                    if obs_max_array[idx] not in [float('inf'), obs_max_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_max_array[idx], obs_max_prim))
-                    obs_max_array[idx] = obs_max_prim
-                for idx in info_dict['act'][1]:
-                    if act_min_array[idx] not in [-float('inf'), act_min_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite min bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(act_min_array[idx], act_min_prim))
-                    act_min_array[idx] = act_min_prim
-                    if act_max_array[idx] not in [float('inf'), act_max_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(act_max_array[idx], act_max_prim))
-                    act_max_array[idx] = act_max_prim
-            ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
-
-        return ranges
 
 class _UnvecWrapper(VecEnvWrapper):
     def __init__(self, venv):

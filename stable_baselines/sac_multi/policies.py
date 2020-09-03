@@ -389,7 +389,8 @@ class FeedForwardPolicy(SACPolicy):
         act_index = []
         self.entropy = 0
         for name, item in primitives.items():
-            # primitive name == 'train/weight'
+            # TODO: Change train/weight -> leveln/name/weight
+            # TODO: Change name of the variable_scope to the layer name of each primitive
             if name == 'train/weight':
                 with tf.variable_scope(name, reuse=reuse):
                     if self.feature_extraction == "cnn":

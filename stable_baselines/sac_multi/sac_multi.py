@@ -66,11 +66,11 @@ class SAC_MULTI(OffPolicyRLModel):
                  gradient_steps=1, target_entropy='auto', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
-                 seed=None, n_cpu_tf_sess=None):
+                 seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
 
         super(SAC_MULTI, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs,
-                                  seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
+                                  seed=seed, n_cpu_tf_sess=n_cpu_tf_sess, composite_primitive_name=composite_primitive_name)
 
         self.buffer_size = buffer_size
         self.learning_rate = learning_rate
@@ -452,6 +452,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                     # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
+                    # TODO: Change train/weight
                     policy_var_list = tf_util.get_trainable_vars('model/train/weight')+tf_util.get_trainable_vars('model/pi/train')
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
@@ -788,6 +789,8 @@ class SAC_MULTI(OffPolicyRLModel):
             "verbose": self.verbose,
             "observation_space": self.observation_space,
             "action_space": self.action_space,
+            "observation_index": self.observation_index,
+            "action_index": self.action_index,
             "obs_space_by_name": self.obs_space_by_name,
             "act_space_by_name": self.act_space_by_name,
             "policy": self.policy,
