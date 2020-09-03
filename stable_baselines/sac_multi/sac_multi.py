@@ -714,7 +714,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 if save_interval and save_path != None:
                     if step % save_interval == 0 and step:
-                        self.save(save_path+"/policy_"+str(step))
+                        self.save(save_path+"/policy_"+str(step),hierarchical=True)
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
