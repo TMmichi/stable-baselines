@@ -455,7 +455,7 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics(self, obs=None, action=None, primitives=None, separate_value=True, reuse=False, scope="values_fn",
+    def make_custom_critics(self, obs=None, action=None, primitives=None, load_value=True, reuse=False, scope="values_fn",
                     create_vf=True, create_qf=True):
         """
         Creates the two Q-Values approximator along with the custom Value function
@@ -472,7 +472,7 @@ class FeedForwardPolicy(SACPolicy):
         if obs is None:
             obs = self.processed_obs
 
-        if not separate_value:
+        if not load_value:
             with tf.variable_scope(scope, reuse=reuse):
                 if self.feature_extraction == "cnn":
                     critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -612,7 +612,7 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics_test(self, obs=None, action=None, primitives=None, separate_value=True, reuse=False, scope="values_fn",
+    def make_custom_critics_test(self, obs=None, action=None, primitives=None, composite_primitive_name="MCP", top_level=0, scope="values_fn", reuse=False, 
                     create_vf=True, create_qf=True):
         """
         Creates the two Q-Values approximator along with the custom Value function
@@ -629,116 +629,87 @@ class FeedForwardPolicy(SACPolicy):
         if obs is None:
             obs = self.processed_obs
 
-        if not separate_value:
-            with tf.variable_scope(scope, reuse=reuse):
-                if self.feature_extraction == "cnn":
-                    critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                else:
-                    critics_h = tf.layers.flatten(obs)
+        value_fn_accum = 0
+        qf1_accum = 0
+        qf2_accum = 0
+        for name, item in primitives.items():
+            if isinstance(item, dict):
+                layer_name = item['layer_name']
+                if 'loaded' in layer_name.split("/") and item['load_value']:
+                    print("layer name: ",layer_name)
+                    with tf.variable_scope(scope, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            critics_h = tf.layers.flatten(obs)
 
-                if create_vf:
-                    # Value function
-                    with tf.variable_scope('vf', reuse=reuse):
-                        vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                    self.value_fn = value_fn
+                        #------------- Input observation seiving layer -------------#
+                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            seive_layer[item['obs'][1][i]][i] = 1
+                        critics_h = tf.matmul(critics_h, seive_layer)
+                        #------------- Observation seiving layer End -------------#
 
-                if create_qf:
-                    # Concatenate preprocessed state and action
-                    qf_h = tf.concat([critics_h, action], axis=-1)
+                        if create_vf:
+                            # Value function
+                            with tf.variable_scope('vf'+'/'+layer_name, reuse=reuse):
+                                vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                            value_fn_accum += value_fn
 
-                    # Double Q values to reduce overestimation
-                    with tf.variable_scope('qf1', reuse=reuse):
-                        qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+                        if create_qf:
+                            #------------- Input action seiving layer -------------#
+                            seive_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
+                            for i in range(len(item['act'][1])):
+                                seive_layer[item['act'][1][i]][i] = 1
+                            qf_h = tf.matmul(action, seive_layer)
+                            #------------- Action seiving layer End -------------#
+                            
+                            # Concatenate preprocessed state and action
+                            qf_h = tf.concat([critics_h, qf_h], axis=-1)
 
-                    with tf.variable_scope('qf2', reuse=reuse):
-                        qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+                            # Double Q values to reduce overestimation
+                            with tf.variable_scope('qf1'+'/'+layer_name, reuse=reuse):
+                                qf1_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
 
-                    self.qf1 = qf1
-                    self.qf2 = qf2
-        else:
-            value_fn_accum = 0
-            qf1_accum = 0
-            qf2_accum = 0
-            for name, item in primitives.items():
-                if isinstance(item, dict):
-                    layer_name = item['layer_name']
-                    if 'loaded' in layer_name.split("/"):
-                        print("layer name: ",layer_name)
-                        with tf.variable_scope(scope, reuse=reuse):
-                            if self.feature_extraction == "cnn":
-                                critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                                raise NotImplementedError("Image input not supported for now")
-                            else:
-                                critics_h = tf.layers.flatten(obs)
+                            with tf.variable_scope('qf2'+'/'+layer_name, reuse=reuse):
+                                qf2_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                                qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
 
-                            #------------- Input observation seiving layer -------------#
-                            seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                            for i in range(len(item['obs'][1])):
-                                seive_layer[item['obs'][1][i]][i] = 1
-                            critics_h = tf.matmul(critics_h, seive_layer)
-                            #------------- Observation seiving layer End -------------#
+                            qf1_accum += qf1
+                            qf2_accum += qf2
 
-                            if create_vf:
-                                # Value function
-                                with tf.variable_scope('vf' + "/" + layer_name, reuse=reuse):
-                                    vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                    value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                                value_fn_accum += value_fn
+        layer_name = 'level'+str(top_level)+'_'+composite_primitive_name
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+            else:
+                critics_h = tf.layers.flatten(obs)
 
-                            if create_qf:
-                                #------------- Input action seiving layer -------------#
-                                seive_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
-                                for i in range(len(item['act'][1])):
-                                    seive_layer[item['act'][1][i]][i] = 1
-                                qf_h = tf.matmul(action, seive_layer)
-                                #------------- Action seiving layer End -------------#
-                                
-                                # Concatenate preprocessed state and action
-                                qf_h = tf.concat([critics_h, qf_h], axis=-1)
+            if create_vf:
+                # Value function
+                with tf.variable_scope('vf'+'/'+layer_name, reuse=reuse):
+                    vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                self.value_fn = value_fn + value_fn_accum
 
-                                # Double Q values to reduce overestimation
-                                with tf.variable_scope('qf1' + "/" + layer_name, reuse=reuse):
-                                    qf1_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                    qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
+            if create_qf:
+                # Concatenate preprocessed state and action
+                qf_h = tf.concat([critics_h, action], axis=-1)
 
-                                with tf.variable_scope('qf2' + "/" + layer_name, reuse=reuse):
-                                    qf2_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                    qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
+                # Double Q values to reduce overestimation
+                with tf.variable_scope('qf1'+'/'+layer_name, reuse=reuse):
+                    qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
 
-                                qf1_accum += qf1
-                                qf2_accum += qf2
+                with tf.variable_scope('qf2'+'/'+layer_name, reuse=reuse):
+                    qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
+                    qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
 
-            with tf.variable_scope(scope, reuse=reuse):
-                if self.feature_extraction == "cnn":
-                    critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                else:
-                    critics_h = tf.layers.flatten(obs)
-
-                if create_vf:
-                    # Value function
-                    with tf.variable_scope('vf', reuse=reuse):
-                        vf_h = mlp(critics_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                    self.value_fn = value_fn + value_fn_accum
-
-                if create_qf:
-                    # Concatenate preprocessed state and action
-                    qf_h = tf.concat([critics_h, action], axis=-1)
-
-                    # Double Q values to reduce overestimation
-                    with tf.variable_scope('qf1', reuse=reuse):
-                        qf1_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
-
-                    with tf.variable_scope('qf2', reuse=reuse):
-                        qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
-                        qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
-
-                    self.qf1 = qf1 + qf1_accum
-                    self.qf2 = qf2 + qf2_accum
+                self.qf1 = qf1 + qf1_accum
+                self.qf2 = qf2 + qf2_accum
 
         return self.qf1, self.qf2, self.value_fn
 

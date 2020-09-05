@@ -318,7 +318,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def setup_custom_model(self, primitives, separate_value):
+    def setup_custom_model(self, primitives, load_value=True):
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -360,14 +360,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
-                    #qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
+                    #qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, load_value,
                     #                                                create_qf=True, create_vf=True)
-                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
+                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, self.actions_ph, primitives, self.composite_primitive_name, self.top_hierarchy_level,
                                                                     create_qf=True, create_vf=True)
-                    #qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, separate_value,
+                    #qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, load_value,
                     #                                                create_qf=True, create_vf=False,
                     #                                                reuse=True)
-                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, policy_out, primitives, separate_value,
+                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, policy_out, primitives, self.composite_primitive_name, self.top_hierarchy_level,
                                                                     create_qf=True, create_vf=False,
                                                                     reuse=True)
 
@@ -401,9 +401,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 with tf.variable_scope("target", reuse=False):
                     # Create the value network
-                    #_, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
+                    #_, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, primitives=primitives, load_value=load_value,
                     #                                                    create_qf=False, create_vf=True)
-                    _, _, value_target = self.target_policy.make_custom_critics_test(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
+                    _, _, value_target = self.target_policy.make_custom_critics_test(self.processed_next_obs_ph, None, primitives, self.composite_primitive_name, self.top_hierarchy_level,
                                                                         create_qf=False, create_vf=True)
                     self.value_target = value_target
 

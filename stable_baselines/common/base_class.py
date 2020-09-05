@@ -240,7 +240,7 @@ class BaseRLModel(ABC):
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
 
-    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, layer_structure, loaded_policy=None, separate_value=True):
+    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, layer_structure, loaded_policy=None, load_value=True):
         # TODO 1: Store level of the top hierarchy
         # TODO 2: Check if there exists same name @ top level of hierarchy
         # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
@@ -257,7 +257,7 @@ class BaseRLModel(ABC):
         :param act_index: ([int, ...]) a list of indices of the action for the primitive.
         :param layer_structure: (dict) layer structure of the primitive policy/value
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
-        :param separate_value: (bool) use separate value network for each primitives
+        :param load_value: (bool) load separate value network for the primitive
         :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
         '''
         if isinstance(loaded_policy, type(None)):
@@ -317,6 +317,7 @@ class BaseRLModel(ABC):
             self.layer_observation_index[primitive_name] = obs_index
             self.layer_action_index[primitive_name] = act_index
             tails = None
+            load_value = False
             
         elif isinstance(loaded_policy, tuple):
             layer_name_list = ['freeze' if freeze else 'train','loaded','level'+str(level)+'_'+name]
@@ -333,13 +334,16 @@ class BaseRLModel(ABC):
             # TODO: Recursive acquisition of obs/act box of decomposed policy
             data_dict, param_dict = loaded_policy
             # from data_dict get:
-            #       primitive_observation_space     ({primitive_name: Box})
-            #       primitive_action_space          ({primitive_name: Box})
-            #       primitive_observation_index     ({primitive_name: list})
-            #       primitive_action_index          ({primitive_name: list})
-            #       primitive_tail                  ({primitive_name: list})
-            #tails = prmiitive_tail
-            #self.primitive[subprimitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails}
+            # for each primitives in data:
+            #          primitive_observation_space     ({primitive_name: Box})
+            #          primitive_action_space          ({primitive_name: Box})
+            #          primitive_observation_index     ({primitive_name: list})
+            #          primitive_action_index          ({primitive_name: list})
+            #          primitive_tail                  ({primitive_name: list})
+            #   obs = (primitive_observation_space, primitive_observation_index)
+            #   act = (primitive_action_space, primitive_action_index)
+            #   tails = prmiitive_tail
+            #   self.primitive[subprimitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails}
             
             obs_space = data_dict['observation_space']
             act_space = data_dict['action_space']
@@ -355,23 +359,23 @@ class BaseRLModel(ABC):
 
             if 'pretrained_param' not in self.primitives.keys():
                 self.primitives['pretrained_param'] = [[],{}]
-            updated_layer_name, updated_param_dict = self.loaded_policy_name_update(layer_name, param_dict, separate_value)
+            updated_layer_name, updated_param_dict = self.loaded_policy_name_update(layer_name, param_dict, load_value)
             self.primitives['pretrained_param'][0] += updated_layer_name
             self.primitives['pretrained_param'][1] = {**self.primitives['pretrained_param'][1], **updated_param_dict}
-            policy_layer_structure, value_layer_structure = self.get_layer_structure((obs, act), param_dict, separate_value)
+            policy_layer_structure, value_layer_structure = self.get_layer_structure((obs, act), param_dict, load_value)
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails}
+        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'load_value': load_value}
         
     @staticmethod
-    def loaded_policy_name_update(layer_name, loaded_policy_dict, separate_value):
+    def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value):
         '''
         Concatenate name of each layers with name of the primitive
 
         :param name: (str) name of the primitive layer
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
-        :param separate_value: (bool) Use separate value network
+        :param load_value: (bool) Use loaded separate value network
         :return: (list, dict) List consisting names of layers with specified primitive
                               Dictionary of parameters by updated names
         '''
@@ -387,7 +391,7 @@ class BaseRLModel(ABC):
                 insert_index = 2
                 add_value = True
             elif 'values_fn' in name_elem:
-                if separate_value:
+                if load_value:
                     insert_index = 3
                     add_value = True
             else:
@@ -405,14 +409,14 @@ class BaseRLModel(ABC):
         return layer_name_list, layer_param_dict
 
     @staticmethod
-    def get_layer_structure(argument_tuple, loaded_policy_dict, separate_value):
+    def get_layer_structure(argument_tuple, loaded_policy_dict, load_value):
         # TODO: Change target/values_fn ~~
         '''
         Return layer structure of the policy/value from parameter dictionary
 
         :param argument_tuple: ((tuple, tuple)) Tuple containing info of observation and action
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
-        :param separate_value: (bool) Use separate value network
+        :param load_value: (bool) Use loaded separate value network
         :return: (list, list) Layer structure of the policy/value
         '''
         obs, _ = argument_tuple
@@ -428,7 +432,7 @@ class BaseRLModel(ABC):
                         "\n\t\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption occured\033[0m"
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
-            if separate_value:
+            if load_value:
                 if name.find('target/values_fn/vf/fc') > -1:
                     if name.find('bias') > -1:
                         value_layer_structure.append(value.shape[0])
@@ -760,7 +764,7 @@ class BaseRLModel(ABC):
         raise NotImplementedError()
 
     @staticmethod
-    def pretrainer_load(model, policy, env, separate_value=True, **kwargs):
+    def pretrainer_load(model, policy, env, **kwargs):
         """
         Construct trainer from policy structure
 
@@ -785,7 +789,7 @@ class BaseRLModel(ABC):
         
         model.set_env(env)
         try:
-            model.setup_custom_model(model.primitives, separate_value)
+            model.setup_custom_model(model.primitives)
         except Exception as e:
             print(e)
             raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.\033[0m")
