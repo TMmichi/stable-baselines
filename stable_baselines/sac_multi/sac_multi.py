@@ -60,7 +60,7 @@ class SAC_MULTI(OffPolicyRLModel):
         If None, the number of cpu of the current machine will be used.
     """
 
-    def __init__(self, policy, env, layers=None, gamma=0.99, learning_rate=1e-4, buffer_size=50000,
+    def __init__(self, policy, env, layers={}, gamma=0.99, learning_rate=1e-4, buffer_size=50000,
                  learning_starts=5000, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
                  gradient_steps=1, target_entropy='auto', action_noise=None,
@@ -354,14 +354,20 @@ class SAC_MULTI(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
-                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.action_space.shape[0])
+                    #self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.action_space.shape[0])
+                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor_test(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
-                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
+                    #qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
+                    #                                                create_qf=True, create_vf=True)
+                    qf1, qf2, value_fn = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, self.actions_ph, primitives, separate_value,
                                                                     create_qf=True, create_vf=True)
-                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, separate_value,
+                    #qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, separate_value,
+                    #                                                create_qf=True, create_vf=False,
+                    #                                                reuse=True)
+                    qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, policy_out, primitives, separate_value,
                                                                     create_qf=True, create_vf=False,
                                                                     reuse=True)
 
@@ -395,7 +401,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 with tf.variable_scope("target", reuse=False):
                     # Create the value network
-                    _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
+                    #_, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
+                    #                                                    create_qf=False, create_vf=True)
+                    _, _, value_target = self.target_policy.make_custom_critics_test(self.processed_next_obs_ph, primitives=primitives, separate_value=separate_value,
                                                                         create_qf=False, create_vf=True)
                     self.value_target = value_target
 
@@ -453,7 +461,13 @@ class SAC_MULTI(OffPolicyRLModel):
                     # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                     # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                     # TODO: Change train/weight
-                    policy_var_list = tf_util.get_trainable_vars('model/train/weight')+tf_util.get_trainable_vars('model/pi/train')
+                    print("Model")
+                    for elem in tf_util.get_trainable_vars('model'):
+                        print(elem)
+                    print("Target")
+                    for elem in tf_util.get_trainable_vars("target"):
+                        print(elem)
+                    policy_var_list = tf_util.get_trainable_vars('model/train')+tf_util.get_trainable_vars('model/pi/train')
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                     # Value train op
@@ -789,10 +803,10 @@ class SAC_MULTI(OffPolicyRLModel):
             "verbose": self.verbose,
             "observation_space": self.observation_space,
             "action_space": self.action_space,
-            "observation_index": self.observation_index,
-            "action_index": self.action_index,
-            "obs_space_by_name": self.obs_space_by_name,
-            "act_space_by_name": self.act_space_by_name,
+            "layer_observation_space": self.layer_observation_space,
+            "layer_action_space": self.layer_action_space,
+            "layer_observation_index": self.layer_observation_index,
+            "layer_action_index": self.layer_action_index,
             "policy": self.policy,
             "n_envs": self.n_envs,
             "n_cpu_tf_sess": self.n_cpu_tf_sess,
