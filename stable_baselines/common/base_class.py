@@ -324,6 +324,8 @@ class BaseRLModel(ABC):
                     layer_name_list.append('level0')
                     primitive_name_list.append('level0')
                     tails = None
+                else:
+                    tails = data_dict.get('tails',None)
                 layer_name = '/'.join(layer_name_list)
                 primitive_name = '/'.join(primitive_name_list)
                 self.tails.append(primitive_name)
@@ -820,15 +822,14 @@ class BaseRLModel(ABC):
 
         act_dim = 0
         for name, info_dict in primitives.items():
-            if name not in  [weight_name, 'pretrained_param']:
+            if name != 'pretrained_param' and 'weight' not in name.split('/'):
                 act_dim = max(act_dim, info_dict['act'][1][-1]+1)
         act_min_array = np.array([-float('inf')]*act_dim)
         act_max_array = np.array([float('inf')]*act_dim)
 
         for name, info_dict in primitives.items():
-            print(name)
-            # TODO: differenciate min/max bounds of each dimensions of obs/act within a single primitive
-            if name not in [weight_name, 'pretrained_param']:
+            if name != 'pretrained_param' and 'weight' not in name.split('/'):
+                print("update prim: ", name)
                 for i, idx in enumerate(info_dict['obs'][1]):
                     obs_min_prim = info_dict['obs'][0].low[i]
                     obs_max_prim = info_dict['obs'][0].high[i]
@@ -850,7 +851,6 @@ class BaseRLModel(ABC):
             ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
 
         return ranges
-
 
     @staticmethod
     def _save_to_file_cloudpickle(save_path, data=None, params=None):
