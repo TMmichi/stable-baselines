@@ -54,10 +54,6 @@ class BaseRLModel(ABC):
         self.tails = []
         self.observation_space = None
         self.action_space = None
-        self.layer_observation_space = {}
-        self.layer_action_space = {}
-        self.layer_observation_index = {}
-        self.layer_action_index = {}
         self.n_envs = None
         self._vectorize_action = False
         self.num_timesteps = 0
@@ -312,39 +308,33 @@ class BaseRLModel(ABC):
 
             policy_layer_structure = layer_structure['policy']
             value_layer_structure = layer_structure['value']
-            self.layer_observation_space[primitive_name] = obs_space
-            self.layer_action_space[primitive_name] = act_space
-            self.layer_observation_index[primitive_name] = obs_index
-            self.layer_action_index[primitive_name] = act_index
             tails = None
+            main_tail = True
             load_value = False
             
         elif isinstance(loaded_policy, tuple):
-            layer_name_list = ['freeze' if freeze else 'train','loaded','level'+str(level)+'_'+name]
-            primitive_name_list = ['level'+str(level)+'_'+name]
-            if level == 1:
-                layer_name_list.append('level0')
-                primitive_name_list.append('level0')
-                tails = None
-            layer_name = '/'.join(layer_name_list)
-            primitive_name = '/'.join(primitive_name_list)
-            self.tails.append(primitive_name)
-
-            # TODO: Recursive decomposition of the loaded policy from data_dict
-            # TODO: Recursive acquisition of obs/act box of decomposed policy
             data_dict, param_dict = loaded_policy
-            # from data_dict get:
-            # for each primitives in data:
-            #          primitive_observation_space     ({primitive_name: Box})
-            #          primitive_action_space          ({primitive_name: Box})
-            #          primitive_observation_index     ({primitive_name: list})
-            #          primitive_action_index          ({primitive_name: list})
-            #          primitive_tail                  ({primitive_name: list})
-            #   obs = (primitive_observation_space, primitive_observation_index)
-            #   act = (primitive_action_space, primitive_action_index)
-            #   tails = prmiitive_tail
-            #   self.primitive[subprimitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails}
-            
+            submodule_primitive = data_dict.get('primitives',OrderedDict())
+            self.primitives = {**self.primitives, **submodule_primitive}
+
+            if name is not None:
+                layer_name_list = ['freeze' if freeze else 'train','loaded','level'+str(level)+'_'+name]
+                primitive_name_list = ['level'+str(level)+'_'+name]
+                if level == 1:
+                    layer_name_list.append('level0')
+                    primitive_name_list.append('level0')
+                    tails = None
+                layer_name = '/'.join(layer_name_list)
+                primitive_name = '/'.join(primitive_name_list)
+                self.tails.append(primitive_name)
+                main_tail = True
+            else:
+                primitive_name = 'loaded'
+                layer_name = 'loaded'
+                tails = data_dict['tails']
+                self.tails = tails
+                main_tail = True
+
             obs_space = data_dict['observation_space']
             act_space = data_dict['action_space']
             assert len(obs_index) == obs_space.shape[0], \
@@ -366,7 +356,7 @@ class BaseRLModel(ABC):
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'load_value': load_value}
+        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
         
     @staticmethod
     def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value):
@@ -390,19 +380,16 @@ class BaseRLModel(ABC):
             if 'pi' in name_elem:
                 insert_index = 2
                 add_value = True
-            elif 'values_fn' in name_elem:
+            elif 'values_fn' in name_elem and layer_name != 'loaded':
                 if load_value:
                     insert_index = 3
-                    add_value = True
-            else:
-                if layer_name == None and 'weight' in name_elem:
                     add_value = True
 
             if add_value:
                 if layer_name:
                     name_elem.insert(insert_index, layer_name)
                 updated_name = '/'.join(name_elem)
-                print("Updated name: ",updated_name)
+                #print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
                 layer_param_dict[updated_name] = value
 
@@ -774,15 +761,18 @@ class BaseRLModel(ABC):
         :param env: (Gym Environment) the new environment to run the loaded model on
         :param kwargs: extra arguments to change the model when loading
         """
-        # Check the existence of 'train/weight' in primitives
-        model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
-        
-        # get total_obs_bound, total_act_bound
-        ranges = model.range_primitive(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+        if 'loaded' not in model.primitives.keys():
+            # Check the existence of 'train/weight' in primitives
+            model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+            
+            # get total_obs_bound, total_act_bound
+            ranges = model.range_primitive(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
 
-        data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
-                'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)
-                }
+            data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
+                    'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)}
+        else:
+            data = {'observation_space': model.primitives['loaded']['obs'][0], \
+                    'action_space': model.primitives['loaded']['act'][0]}
         
         model.__dict__.update(kwargs)
         model.__dict__.update(data)
@@ -795,7 +785,10 @@ class BaseRLModel(ABC):
             raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.\033[0m")
 
         model.load_parameters(model.primitives['pretrained_param'][1], exact_match=False)
-
+        model.primitives.pop('pretrained_param')
+        for tail in model.tails:
+            model.primitives[tail]['main_tail'] = False
+            
         return model
     
     @staticmethod
