@@ -565,53 +565,6 @@ class FeedForwardPolicy(SACPolicy):
                         qf2_accum += qf2
 
 
-        for _, item in primitives.items():
-            if isinstance(item, dict):
-                layer_name = item['layer_name']
-                if 'loaded' in layer_name.split("/") and item['load_value']:
-                    with tf.variable_scope(scope, reuse=reuse):
-                        if self.feature_extraction == "cnn":
-                            critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                            raise NotImplementedError("Image input not supported for now")
-                        else:
-                            critics_h = tf.layers.flatten(obs)
-
-                        #------------- Input observation seiving layer -------------#
-                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                        for i in range(len(item['obs'][1])):
-                            seive_layer[item['obs'][1][i]][i] = 1
-                        critics_h = tf.matmul(critics_h, seive_layer)
-                        #------------- Observation seiving layer End -------------#
-
-                        if create_vf:
-                            # Value function
-                            with tf.variable_scope('vf'+'/'+layer_name, reuse=reuse):
-                                vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                value_fn = tf.layers.dense(vf_h, 1, name="vf")
-                            value_fn_accum += value_fn
-
-                        if create_qf:
-                            #------------- Input action seiving layer -------------#
-                            seive_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
-                            for i in range(len(item['act'][1])):
-                                seive_layer[item['act'][1][i]][i] = 1
-                            qf_h = tf.matmul(action, seive_layer)
-                            #------------- Action seiving layer End -------------#
-                            
-                            # Concatenate preprocessed state and action
-                            qf_h = tf.concat([critics_h, qf_h], axis=-1)
-
-                            # Double Q values to reduce overestimation
-                            with tf.variable_scope('qf1'+'/'+layer_name, reuse=reuse):
-                                qf1_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                qf1 = tf.layers.dense(qf1_h, 1, name="qf1")
-
-                            with tf.variable_scope('qf2'+'/'+layer_name, reuse=reuse):
-                                qf2_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                                qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
-
-                            qf1_accum += qf1
-                            qf2_accum += qf2
         if 'loaded' not in primitives.keys():
             layer_name = 'train/level'+str(top_level)+'_'+composite_primitive_name
             with tf.variable_scope(scope, reuse=reuse):
