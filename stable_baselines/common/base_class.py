@@ -136,7 +136,7 @@ class BaseRLModel(ABC):
         assert self.observation_space == env.observation_space, \
             "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space, env.observation_space)
         assert self.action_space == env.action_space, \
-            "Error: the environment passed must have at least the same action space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.action_space, env.action_space)
+            "Error: the environment passed must have at least the same action space as the model was trained on. self.act = {0}, env.act = {1}".format(self.action_space, env.action_space)
 
         if self._requires_vec_env:
             assert isinstance(env, VecEnv), \
@@ -307,7 +307,7 @@ class BaseRLModel(ABC):
             act = (act_space, act_index)
 
             policy_layer_structure = layer_structure['policy']
-            value_layer_structure = layer_structure['value']
+            value_layer_structure = layer_structure.get('value',None)
             tails = None
             main_tail = True
             load_value = False
@@ -318,6 +318,10 @@ class BaseRLModel(ABC):
             self.primitives = {**self.primitives, **submodule_primitive}
 
             if name is not None:
+                loaded_name = data_dict.get('composite_primitive_name', None)
+                if name != loaded_name and loaded_name is not None:
+                    print("\n\t\033[93m[WARNING]: Name of the loaded policy ({0}) is different from the received name ({1}). {0} will be used.\033[0m".format(loaded_name,name))
+                    name = loaded_name
                 layer_name_list = ['freeze' if freeze else 'train','loaded','level'+str(level)+'_'+name]
                 primitive_name_list = ['level'+str(level)+'_'+name]
                 if level == 1:
@@ -706,13 +710,17 @@ class BaseRLModel(ABC):
         # Keep track of not-updated variables
         not_updated_variables = set(self._param_load_ops.keys())
         for param_name, param_value in params.items():
-            print("Loaded param: ",param_name)
-            placeholder, assign_op = self._param_load_ops[param_name]
-            feed_dict[placeholder] = param_value
-            # Create list of tf.assign operations for sess.run
-            param_update_ops.append(assign_op)
-            # Keep track which variables are updated
-            not_updated_variables.remove(param_name)
+            try:
+                placeholder, assign_op = self._param_load_ops[param_name]
+                feed_dict[placeholder] = param_value
+                # Create list of tf.assign operations for sess.run
+                param_update_ops.append(assign_op)
+                # Keep track which variables are updated
+                not_updated_variables.remove(param_name)
+                print("Loaded param: ",param_name)
+            except Exception:
+                print("Param not in graph: ",param_name)
+
         for param_name in not_updated_variables:
             print("Unloaded param: ", param_name)
 
@@ -765,10 +773,11 @@ class BaseRLModel(ABC):
         """
         if 'loaded' not in model.primitives.keys():
             # Check the existence of 'train/weight' in primitives
-            model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+            weight_name = model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
             
             # get total_obs_bound, total_act_bound
             ranges = model.range_primitive(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
+            model.primitives[weight_name]['composite_action_index'] = list(range(len(ranges[1][0])))
 
             data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
                     'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)}
@@ -801,8 +810,11 @@ class BaseRLModel(ABC):
 
         :param primitives: (dict) obs/act/structure info of primitives
         '''
-        assert 'level'+str(level)+'_'+composite_primitive_name+"/weight" in primitives.keys(), \
+        weight_name = 'level'+str(level)+'_'+composite_primitive_name+"/weight"
+        assert weight_name in primitives.keys(), \
             '\n\t\033[91m[ERROR]: No weight at the top level hierarchy. YOU MUST HAVE IT\033[0m'
+        
+        return weight_name
     
     @staticmethod
     def range_primitive(primitives: dict, composite_primitive_name: str, level: int) -> list:

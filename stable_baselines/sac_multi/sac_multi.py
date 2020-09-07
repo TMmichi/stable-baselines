@@ -354,6 +354,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     with tf.variable_scope("model", reuse=False):
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
+                    test = True
+
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
                         # first return value corresponds to deterministic actions
@@ -363,15 +365,11 @@ class SAC_MULTI(OffPolicyRLModel):
                         # Monitor the entropy of the policy,
                         # this is not used for training
                         self.entropy = tf.reduce_mean(self.policy_tf.entropy)
+                        
                         #  Use two Q-functions to improve performance by reducing overestimation bias.
-                        # qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, self.composite_primitive_name, self.top_hierarchy_level,
-                        #                                                 create_qf=True, create_vf=True)
-                        # qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, self.composite_primitive_name, self.top_hierarchy_level,
-                        #                                                 create_qf=True, create_vf=False,
-                        #                                                 reuse=True)
-                        qf1, qf2, value_fn = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, self.actions_ph, primitives, self.tails, self.composite_primitive_name, self.top_hierarchy_level,
+                        qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, self.tails,
                                                                         create_qf=True, create_vf=True)
-                        qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics_test(self.processed_obs_ph, policy_out, primitives, self.tails, self.composite_primitive_name, self.top_hierarchy_level,
+                        qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, self.tails,
                                                                         create_qf=True, create_vf=False,
                                                                         reuse=True)
 
@@ -405,9 +403,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     with tf.variable_scope("target", reuse=False):
                         # Create the value network
-                        # _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, None, primitives, self.composite_primitive_name, self.top_hierarchy_level,
-                        #                                                     create_qf=False, create_vf=True)
-                        _, _, value_target = self.target_policy.make_custom_critics_test(self.processed_next_obs_ph, None, primitives, self.tails, self.composite_primitive_name, self.top_hierarchy_level,
+                        _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, None, primitives, self.tails,
                                                                             create_qf=False, create_vf=True)
                         self.value_target = value_target
 
@@ -788,6 +784,16 @@ class SAC_MULTI(OffPolicyRLModel):
         observation = np.array(observation)
         observation = observation.reshape((-1,) + self.observation_space.shape)
         return self.policy_tf.get_weight(observation)
+    
+    def get_primitive_action(self, observation):
+        observation = np.array(observation)
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        return self.policy_tf.get_primitive_action(observation)
+    
+    def get_primitive_log_std(self, observation):
+        observation = np.array(observation)
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        return self.policy_tf.get_primitive_log_std(observation)
 
     def get_parameter_list(self):
         return (self.params +
@@ -795,6 +801,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
     def save(self, save_path, cloudpickle=False, hierarchical=False):        
         data = {
+            "composite_primitive_name": self.composite_primitive_name,
             "learning_rate": self.learning_rate,
             "buffer_size": self.buffer_size,
             "learning_starts": self.learning_starts,
