@@ -644,10 +644,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 try:
                     weight = self.policy_tf.get_weight(obs[None])
+                    new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
                 except Exception:
-                    weight = [[0,0,0]]
-                #new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
-                new_obs, reward, done, info = self.env.step(unscaled_action)
+                    new_obs, reward, done, info = self.env.step(unscaled_action)
 
                 self.num_timesteps += 1
 
