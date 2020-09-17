@@ -461,6 +461,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                         # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
+                        print("Policy optimizee: ")
+                        for var in policy_var_list:
+                            print("\t",var)
                         policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                         # Value train op
@@ -469,7 +472,13 @@ class SAC_MULTI(OffPolicyRLModel):
                         values_params = tf_util.get_trainable_vars('model/values_fn/\w*/train')
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
+                        print("Source optimizee: ")
+                        for var in source_params_trainable:
+                            print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
+                        print("Target optimizee: ")
+                        for var in target_params_trainable:
+                            print("\t",var)
 
                         source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                         target_params = tf_util.get_trainable_vars("target/values_fn/vf")
@@ -533,11 +542,6 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
-
-                for var in self.params:
-                    print(var)
-                for var in self.target_params:
-                    print(var)
 
                 # Initialize Variables and target network
                 with self.sess.as_default():

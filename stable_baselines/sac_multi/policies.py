@@ -309,6 +309,7 @@ class FeedForwardPolicy(SACPolicy):
             # Important difference with SAC and other algo such as PPO:
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
             log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
+            #log_std = tf.Print(log_std,[log_std],"\tlog_std = ", summarize=-1)
             self.primitive_log_std['std'] = log_std
 
         # Regularize policy output (not used for now)
@@ -324,6 +325,7 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = std = tf.exp(log_std)
         # Reparameterization trick
+        #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
         pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
         logp_pi = gaussian_likelihood(pi_, mu_, log_std)
         self.entropy = gaussian_entropy(log_std)
@@ -387,7 +389,11 @@ class FeedForwardPolicy(SACPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse)
 
+        pi_MCP = tf.Print(pi_MCP,[pi_MCP, tf.shape(pi_MCP)], "pi_MCP = ", summarize=-1)
+        mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "mu_MCP = ", summarize=-1)
+        log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
+        logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
         self.std = tf.exp(log_std_MCP)
         self.policy_train = pi_MCP
         self.deterministic_policy_train = self.act_mu = mu_MCP
@@ -485,13 +491,15 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
                         mu_array.append(mu_)
                         self.primitive_actions[name] = mu_
 
                         log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         act_index.append(item['act'][1])
 
-                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    #log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
                     log_std_array.append(log_std)
                     self.primitive_log_std[name] = log_std
                     
