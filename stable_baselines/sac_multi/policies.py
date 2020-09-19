@@ -80,19 +80,10 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     """
     with tf.variable_scope("fuse"):
         mu_MCP = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
-        if debug:
-            mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "temp = ", summarize=-1)
-            mu_MCP = tf.Print(mu_MCP,[weight, tf.shape(weight)], "weight = ", summarize=-1)
         for i in range(len(mu_array)):
-            if debug:
-                mu_array[i] = tf.Print(mu_array[i],[mu_array[i], tf.shape(mu_array[i])], "mu value {0} = ".format(i), summarize=-1)
-                
             weight_tile_index = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile_index, tf.exp(log_std_array[i]))
             mu_weighted_i = mu_array[i] * normed_weight_index
-            if debug:
-                weight_tile_index = tf.Print(weight_tile_index, [weight_tile_index, tf.shape(weight_tile_index)], "weight_tile {0} = ".format(i), summarize=-1)
-                mu_weighted_i = tf.Print(mu_weighted_i,[mu_weighted_i], "weighted mu value {0} = ".format(i), summarize=-1)
             append_idx = 0
             for j in range(total_action_dimension):
                 print("Primitive Index ", i)
@@ -105,8 +96,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
                         mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:,append_idx], [-1,1])], 1, name="mu_temp")
                         std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,append_idx], [-1,1])], 1, name="std_temp")
                     append_idx += 1
-                    if debug:
-                        mu_temp = tf.Print(mu_temp, [mu_temp],"mu_temp(in) at {0}, {1} = ".format(i,j), summarize=-1)
                 else:
                     print("\tNot in act index")
                     if j == 0:
@@ -115,23 +104,12 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
                     else:
                         mu_temp = tf.concat([mu_temp, tf.reshape(mu_weighted_i[:,0]*0, [-1,1])], 1, name="mu_temp")
                         std_temp = tf.concat([std_temp, tf.reshape(normed_weight_index[:,0]*0, [-1,1])], 1, name="std_temp")
-                    if debug:
-                        mu_temp = tf.Print(mu_temp, [mu_temp],"mu_temp(not in) at {0}, {1} = ".format(i,j), summarize=-1)
             mu_MCP += mu_temp
             std_sum += std_temp
-            if debug:
-                mu_MCP = tf.Print(mu_MCP, [mu_MCP],"mu_MCP at {0} = ".format(i), summarize=-1)
-                std_sum = tf.Print(std_sum, [std_sum],"std_sum at {0} = ".format(i), summarize=-1)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
     mu_MCP = tf.math.multiply(mu_MCP, std_MCP, name="mu_MCP")
-    if debug:
-        mu_MCP = tf.Print(mu_MCP,[mu_MCP[0]],"mu_MCP = ")
-    pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * std_MCP, name="pi_MCP")
-    
-    log_std_MCP = tf.log(tf.clip_by_value(std_MCP,1e-10, 1e10), name="log_std_MCP")
-    if debug:
-        log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP[0]],"log_std_MCP = ")
-        log_std_MCP = tf.Print(log_std_MCP,[],"")
+    log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
+    pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -309,7 +287,6 @@ class FeedForwardPolicy(SACPolicy):
             # Important difference with SAC and other algo such as PPO:
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
             log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
-            #log_std = tf.Print(log_std,[log_std],"\tlog_std = ", summarize=-1)
             self.primitive_log_std['std'] = log_std
 
         # Regularize policy output (not used for now)
@@ -325,13 +302,17 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = std = tf.exp(log_std)
         # Reparameterization trick
+        #std = tf.Print(std,[std],"\tstd = ", summarize=-1)
         #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
         pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
+        #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
         logp_pi = gaussian_likelihood(pi_, mu_, log_std)
         self.entropy = gaussian_entropy(log_std)
         # MISSING: reg params for log and mu
         # Apply squashing and account for it in the probability
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        #deterministic_policy = mu_
+        #policy = pi_
         self.policy = policy
         self.deterministic_policy = deterministic_policy
 
@@ -392,14 +373,14 @@ class FeedForwardPolicy(SACPolicy):
         pi_MCP = tf.Print(pi_MCP,[pi_MCP, tf.shape(pi_MCP)], "pi_MCP = ", summarize=-1)
         mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "mu_MCP = ", summarize=-1)
         log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
+
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
-        logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
+        #logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
         self.std = tf.exp(log_std_MCP)
         self.policy_train = pi_MCP
         self.deterministic_policy_train = self.act_mu = mu_MCP
 
         # policies with squashing func at test time
-        # TODO: Need to check if these variables are used @ training time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
@@ -498,6 +479,7 @@ class FeedForwardPolicy(SACPolicy):
                         log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         act_index.append(item['act'][1])
 
+                    # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                     #log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                     log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
                     log_std_array.append(log_std)
