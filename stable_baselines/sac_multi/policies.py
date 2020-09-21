@@ -9,7 +9,7 @@ from stable_baselines.common.tf_layers import mlp
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
-LOG_STD_MAX = 2
+LOG_STD_MAX = 10
 LOG_STD_MIN = -20
 debug = False
 
@@ -444,12 +444,12 @@ class FeedForwardPolicy(SACPolicy):
                         else:
                             pi_h = tf.layers.flatten(obs)
                         
-                        #------------- Input observation seiving layer -------------#
-                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
-                            seive_layer[item['obs'][1][i]][i] = 1
-                        pi_h = tf.matmul(pi_h, seive_layer)
-                        #------------- Observation seiving layer End -------------#
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                         weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
@@ -462,30 +462,33 @@ class FeedForwardPolicy(SACPolicy):
                         else:
                             pi_h = tf.layers.flatten(obs)
                         
-                        #------------- Input observation seiving layer -------------#
-                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
-                            seive_layer[item['obs'][1][i]][i] = 1
-                        pi_h = tf.matmul(pi_h, seive_layer)
-                        #------------- Observation seiving layer End -------------#
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
-                        mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
-                        mu_array.append(mu_)
-                        self.primitive_actions[name] = mu_
-
+                        mu_ = tf.tanh(mu_)
                         log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
-                        act_index.append(item['act'][1])
+
+                    mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
 
                     # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                     #log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                     log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
-                    log_std_array.append(log_std)
-                    self.primitive_log_std[name] = log_std
                     
+                    self.primitive_actions[name] = mu_
+                    self.primitive_log_std[name] = log_std
+                    mu_array.append(mu_)
+                    log_std_array.append(log_std)
+
                     self.entropy += gaussian_entropy(log_std)
+
+                    act_index.append(item['act'][1])
             else:
                 with tf.variable_scope(layer_name, reuse=reuse):
                     _, mu_, log_std_ = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse)
@@ -517,12 +520,12 @@ class FeedForwardPolicy(SACPolicy):
                         else:
                             critics_h = tf.layers.flatten(obs)
 
-                        #------------- Input observation seiving layer -------------#
-                        seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
-                            seive_layer[item['obs'][1][i]][i] = 1
-                        critics_h = tf.matmul(critics_h, seive_layer)
-                        #------------- Observation seiving layer End -------------#
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        critics_h = tf.matmul(critics_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
 
                         if create_vf:
                             # Value function
@@ -532,12 +535,12 @@ class FeedForwardPolicy(SACPolicy):
                             self.primitive_value[layer_name] = value_fn
 
                         if create_qf:
-                            #------------- Input action seiving layer -------------#
-                            seive_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
+                            #------------- Input action sieving layer -------------#
+                            sieve_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
                             for i in range(len(item['act'][1])):
-                                seive_layer[item['act'][1][i]][i] = 1
-                            qf_h = tf.matmul(action, seive_layer)
-                            #------------- Action seiving layer End -------------#
+                                sieve_layer[item['act'][1][i]][i] = 1
+                            qf_h = tf.matmul(action, sieve_layer)
+                            #------------- Action sieving layer End -------------#
                             
                             # Concatenate preprocessed state and action
                             qf_h = tf.concat([critics_h, qf_h], axis=-1)
@@ -564,12 +567,12 @@ class FeedForwardPolicy(SACPolicy):
                     else:
                         critics_h = tf.layers.flatten(obs)
 
-                    #------------- Input observation seiving layer -------------#
-                    seive_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                    #------------- Input observation sieving layer -------------#
+                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                     for i in range(len(item['obs'][1])):
-                        seive_layer[item['obs'][1][i]][i] = 1
-                    critics_h = tf.matmul(critics_h, seive_layer)
-                    #------------- Observation seiving layer End -------------#
+                        sieve_layer[item['obs'][1][i]][i] = 1
+                    critics_h = tf.matmul(critics_h, sieve_layer)
+                    #------------- Observation sieving layer End -------------#
 
                     if create_vf:
                         # Value function
@@ -579,12 +582,12 @@ class FeedForwardPolicy(SACPolicy):
                         self.primitive_value[layer_name] = value_fn
 
                     if create_qf:
-                        #------------- Input action seiving layer -------------#
-                        seive_layer = np.zeros([action.shape[1], len(item['composite_action_index'])], dtype=np.float32)
+                        #------------- Input action sieving layer -------------#
+                        sieve_layer = np.zeros([action.shape[1], len(item['composite_action_index'])], dtype=np.float32)
                         for i in range(len(item['composite_action_index'])):
-                            seive_layer[item['composite_action_index']][i] = 1
-                        qf_h = tf.matmul(action, seive_layer)
-                        #------------- Action seiving layer End -------------#
+                            sieve_layer[item['composite_action_index']][i] = 1
+                        qf_h = tf.matmul(action, sieve_layer)
+                        #------------- Action sieving layer End -------------#
                         
                         # Concatenate preprocessed state and action
                         qf_h = tf.concat([critics_h, qf_h], axis=-1)
