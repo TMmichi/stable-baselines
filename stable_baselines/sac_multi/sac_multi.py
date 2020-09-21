@@ -257,7 +257,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+                    policy_train_op = policy_optimizer.apply_gradients(grads)
+                    #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+                    for var in tf_util.get_trainable_vars('model/pi'):
+                        tf.summary.histogram(var.name, var)
+                        print("\t",var)
+                    for index, grad in enumerate(grads): 
+                        tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -265,6 +272,10 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                     target_params = tf_util.get_trainable_vars("target/values_fn/vf")
+
+                    for var in target_params:
+                        tf.summary.histogram(var.name, var)
+                        print("\t",var)
 
                     # Polyak averaging for target variables
                     self.target_update_op = [
@@ -339,6 +350,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.observations_ph = self.policy_tf.obs_ph
                     # Normalized observation for pixels
                     self.processed_obs_ph = self.policy_tf.processed_obs
+                    tf.summary.histogram('observations', self.processed_obs_ph)
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.processed_next_obs_ph = self.target_policy.processed_obs
                     # None
@@ -463,6 +475,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
                         print("Policy optimizee: ")
                         for var in policy_var_list:
+                            tf.summary.histogram(var.name, var)
                             print("\t",var)
                         policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
@@ -474,6 +487,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
                         print("Source optimizee: ")
                         for var in source_params_trainable:
+                            tf.summary.histogram(var.name, var)
                             print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
                         print("Target optimizee: ")
@@ -537,7 +551,7 @@ class SAC_MULTI(OffPolicyRLModel):
                             tf.summary.scalar('ent_coef', self.ent_coef)
                             tf.summary.scalar('target_ent', self.target_entropy)
 
-                        tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
+                        #tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")

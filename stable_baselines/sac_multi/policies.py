@@ -271,48 +271,82 @@ class FeedForwardPolicy(SACPolicy):
 
         self.activ_fn = act_fun
 
-    def make_actor(self, obs=None, reuse=False, scope="pi"):
+    def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
         if obs is None:
             obs = self.processed_obs
+        non_log = True
+        if not non_log:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                else:
+                    pi_h = tf.layers.flatten(obs)
 
-        with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn":
-                pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-            else:
-                pi_h = tf.layers.flatten(obs)
+                pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
+                self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
+                # Important difference with SAC and other algo such as PPO:
+                # the std depends on the state, so we cannot use stable_baselines.common.distribution
+                log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
+                self.primitive_log_std['std'] = log_std
 
-            self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
-            # Important difference with SAC and other algo such as PPO:
-            # the std depends on the state, so we cannot use stable_baselines.common.distribution
-            log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
-            self.primitive_log_std['std'] = log_std
+            # Regularize policy output (not used for now)
+            # reg_loss = self.reg_weight * 0.5 * tf.reduce_mean(log_std ** 2)
+            # reg_loss += self.reg_weight * 0.5 * tf.reduce_mean(mu ** 2)
+            # self.reg_loss = reg_loss
 
-        # Regularize policy output (not used for now)
-        # reg_loss = self.reg_weight * 0.5 * tf.reduce_mean(log_std ** 2)
-        # reg_loss += self.reg_weight * 0.5 * tf.reduce_mean(mu ** 2)
-        # self.reg_loss = reg_loss
+            # OpenAI Variation to cap the standard deviation
+            # activation = tf.tanh # for log_std
+            # log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+            # Original Implementation
+            log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
-        # OpenAI Variation to cap the standard deviation
-        # activation = tf.tanh # for log_std
-        # log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
-        # Original Implementation
-        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+            self.std = std = tf.exp(log_std)
+            # Reparameterization trick
+            #std = tf.Print(std,[std],"\tstd = ", summarize=-1)
+            tf.summary.histogram('std', std)
+            tf.summary.merge_all()
+            #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
+            pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
+            #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
+            logp_pi = gaussian_likelihood(pi_, mu_, log_std)
+            self.entropy = gaussian_entropy(log_std)
+            # MISSING: reg params for log and mu
+            # Apply squashing and account for it in the probability
+            deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        else:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                else:
+                    pi_h = tf.layers.flatten(obs)
 
-        self.std = std = tf.exp(log_std)
-        # Reparameterization trick
-        #std = tf.Print(std,[std],"\tstd = ", summarize=-1)
-        #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
-        pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
-        #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
-        logp_pi = gaussian_likelihood(pi_, mu_, log_std)
-        self.entropy = gaussian_entropy(log_std)
-        # MISSING: reg params for log and mu
-        # Apply squashing and account for it in the probability
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
-        #deterministic_policy = mu_
-        #policy = pi_
+                pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
+
+                self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
+                # Important difference with SAC and other algo such as PPO:
+                # the std depends on the state, so we cannot use stable_baselines.common.distribution
+                std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation='relu') + EPS
+                log_std = tf.log(std)
+                self.primitive_log_std['log_std'] = log_std
+
+            log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+
+            self.std = std
+            # Reparameterization trick
+            #std = tf.Print(std,[std],"\tstd = ", summarize=-1)
+            tf.summary.histogram('mu_', mu_)
+            tf.summary.histogram('std', std)
+            tf.summary.merge_all()
+            #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
+            pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
+            #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
+            logp_pi = gaussian_likelihood(pi_, mu_, log_std)
+            self.entropy = gaussian_entropy(log_std)
+            # MISSING: reg params for log and mu
+            # Apply squashing and account for it in the probability
+            deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        
         self.policy = policy
         self.deterministic_policy = deterministic_policy
 
@@ -370,9 +404,12 @@ class FeedForwardPolicy(SACPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse)
 
-        pi_MCP = tf.Print(pi_MCP,[pi_MCP, tf.shape(pi_MCP)], "pi_MCP = ", summarize=-1)
-        mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "mu_MCP = ", summarize=-1)
-        log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
+        #pi_MCP = tf.Print(pi_MCP,[pi_MCP, tf.shape(pi_MCP)], "pi_MCP = ", summarize=-1)
+        #mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "mu_MCP = ", summarize=-1)
+        tf.summary.histogram('mu_MCP', mu_MCP)
+        #log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
+        tf.summary.histogram('log_std_MCP', log_std_MCP)
+        tf.summary.merge_all()
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         #logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
@@ -473,13 +510,21 @@ class FeedForwardPolicy(SACPolicy):
 
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         mu_ = tf.tanh(mu_)
+                        tf.summary.histogram('mu_'+name, mu_)
+                        #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
+                        mu_array.append(mu_)
+                        self.primitive_actions[name] = mu_
+
                         log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
 
                     mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
 
                     # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
-                    #log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                    log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
+                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
+                    tf.summary.histogram('log_std_'+name, log_std)
+                    log_std_array.append(log_std)
+                    self.primitive_log_std[name] = log_std
                     
                     self.primitive_actions[name] = mu_
                     self.primitive_log_std[name] = log_std
@@ -487,8 +532,7 @@ class FeedForwardPolicy(SACPolicy):
                     log_std_array.append(log_std)
 
                     self.entropy += gaussian_entropy(log_std)
-
-                    act_index.append(item['act'][1])
+                    tf.summary.merge_all()
             else:
                 with tf.variable_scope(layer_name, reuse=reuse):
                     _, mu_, log_std_ = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse)
