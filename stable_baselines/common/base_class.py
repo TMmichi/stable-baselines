@@ -240,9 +240,9 @@ class BaseRLModel(ABC):
         # TODO 1: Store level of the top hierarchy
         # TODO 2: Check if there exists same name @ top level of hierarchy
         # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
-        # TODO 3-2: else -> check wheter given name is identical to the name of the weight of the submodule
+        # TODO 3-2: else -> check whether given name is identical to the name of the weight of the submodule
         '''
-        Returns info of the primtive as a dictionary
+        Returns info of the primitive as a dictionary
 
         :param name: (str) name of the primitive
         :param freeze: (bool) primitive to be frozen at training time

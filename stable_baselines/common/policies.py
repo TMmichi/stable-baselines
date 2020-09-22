@@ -583,6 +583,330 @@ class FeedForwardPolicy(ActorCriticPolicy):
         return self.sess.run(self.value_flat, {self.obs_ph: obs})
 
 
+class HierarchicalPolicy(ActorCriticPolicy):
+    """
+    Policy object that implements actor critic, using a hierarchical neural network.
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param layers: ([int]) (deprecated, use net_arch instead) The size of the Neural network for the policy
+        (if None, default to [64, 64])
+    :param net_arch: (list) Specification of the actor-critic policy network architecture (see mlp_extractor
+        documentation for details).
+    :param act_fun: (tf.func) the activation function to use in the neural network.
+    :param cnn_extractor: (function (TensorFlow Tensor, ``**kwargs``): (TensorFlow Tensor)) the CNN feature extraction
+    :param feature_extraction: (str) The feature extraction type ("cnn" or "mlp")
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
+                 act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
+        super(HierarchicalPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
+                                                scale=(feature_extraction == "cnn"))
+        self._kwargs_check(feature_extraction, kwargs)
+        if not isinstance(layers, dict()):
+            raise NotImplementedError("Non-dict instance of layers is not supported")
+        self.policy_layers = layers.get('policy',[64,64])
+        self.value_layers = layers.get('value',[64,64])
+
+        loaded = True if 'loaded' in primitives.keys() else False
+        if loaded:
+
+        with tf.variable_scope("model", reuse=reuse):
+
+            if feature_extraction == "cnn":
+                pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
+            else:
+                pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
+
+            self._value_fn = linear(vf_latent, 'vf', 1)
+
+            self._proba_distribution, self._policy, self.q_value = \
+                self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01)
+
+        self._setup_init()
+    
+    def _setup_init(self):
+        """Sets up the distributions, actions, and value."""
+        with tf.variable_scope("output", reuse=True):
+            assert self.policy is not None and self.proba_distribution is not None and self.value_fn is not None
+            self._action = self.proba_distribution.sample()
+            self._deterministic_action = self.proba_distribution.mode()
+            self._neglogp = self.proba_distribution.neglogp(self.action)
+            if isinstance(self.proba_distribution, CategoricalProbabilityDistribution):
+                self._policy_proba = tf.nn.softmax(self.policy)
+            elif isinstance(self.proba_distribution, DiagGaussianProbabilityDistribution):
+                self._policy_proba = [self.proba_distribution.mean, self.proba_distribution.std]
+            elif isinstance(self.proba_distribution, BernoulliProbabilityDistribution):
+                self._policy_proba = tf.nn.sigmoid(self.policy)
+            elif isinstance(self.proba_distribution, MultiCategoricalProbabilityDistribution):
+                self._policy_proba = [tf.nn.softmax(categorical.flatparam())
+                                     for categorical in self.proba_distribution.categoricals]
+            else:
+                self._policy_proba = []  # it will return nothing, as it is not implemented
+            self._value_flat = self.value_fn[:, 0]
+
+    def make_custom_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
+        """
+        Creates a custom actor object
+
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param primitives: (dict) Obs/act information of primitives
+        :param total_action_dimension: (int) Dimension of a total action
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name of the actor
+        :return: (TensorFlow Tensor) the output tensor
+        """
+        if obs is None:
+            obs = self.processed_obs
+        with tf.variable_scope(scope, reuse=reuse):
+            pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse)
+
+        return deterministic_policy, policy, logp_pi
+
+    def make_custom_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
+                    create_vf=True, create_qf=True):
+        """
+        Creates the two Q-Values approximator along with the custom Value function
+
+        :param primitives: (dict) Obs/act information of primitives
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param action: (TensorFlow Tensor) The action placeholder
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name
+        :param create_vf: (bool) Whether to create Value fn or not
+        :param create_qf: (bool) Whether to create Q-Values fn or not
+        :return: ([tf.Tensor]) Mean, action and log probability
+        """
+        self.qf1 = 0
+        self.qf2 = 0
+        self.value_fn = 0
+
+        if obs is None:
+            obs = self.processed_obs
+
+        with tf.variable_scope(scope, reuse=reuse):
+            if create_vf:
+                with tf.variable_scope('vf', reuse=reuse):
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_vf=True)
+            
+            if create_qf:
+                # Double Q values to reduce overestimation
+                with tf.variable_scope('qf1', reuse=reuse):
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf1=True)
+                with tf.variable_scope('qf2', reuse=reuse):
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf2=True)
+
+        return self.qf1, self.qf2, self.value_fn
+
+    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False):
+        print("Received tails in actor graph: ",tails)
+        if obs is None:
+            obs = self.processed_obs
+
+        mu_array = []
+        log_std_array = []
+        act_index = []
+        weight = None
+
+        for name in tails:
+            item = primitives[name]
+            layer_name = item['layer_name'] if item['main_tail'] else name
+            if item['tails'] == None:
+                if 'weight' in name.split('/'):
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
+
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                        self.weight[name] = weight
+                else:
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
+
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+
+                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        mu_ = tf.tanh(mu_)
+                        tf.summary.histogram('mu_'+name, mu_)
+                        #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
+                        mu_array.append(mu_)
+                        self.primitive_actions[name] = mu_
+
+                        log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+
+                    mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
+
+                    # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
+                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                    #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
+                    tf.summary.histogram('log_std_'+name, log_std)
+                    log_std_array.append(log_std)
+                    self.primitive_log_std[name] = log_std
+                    
+                    self.primitive_actions[name] = mu_
+                    self.primitive_log_std[name] = log_std
+                    mu_array.append(mu_)
+                    log_std_array.append(log_std)
+
+                    self.entropy += gaussian_entropy(log_std)
+                    tf.summary.merge_all()
+            else:
+                with tf.variable_scope(layer_name, reuse=reuse):
+                    _, mu_, log_std_ = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse)
+                mu_array.append(mu_)
+                log_std_array.append(log_std_)
+                act_index.append(item['act'][1])
+        
+        assert not isinstance(weight, type(None)), \
+            '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
+        
+        return pi_MCP, mu_MCP, log_std_MCP
+   
+    def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, 
+                                create_vf=False, create_qf=False, qf1=False, qf2=False):
+        print("Received tails in value graph: ",tails)
+        if obs is None:
+            obs = self.processed_obs
+
+        for name in tails:
+            item = primitives[name]
+            if item['load_value']:
+                layer_name = item['layer_name'] if item['main_tail'] else name
+                if item['tails'] == None:
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            critics_h = tf.layers.flatten(obs)
+
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        critics_h = tf.matmul(critics_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
+
+                        if create_vf:
+                            # Value function
+                            vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                            value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                            self.value_fn += value_fn
+                            self.primitive_value[layer_name] = value_fn
+
+                        if create_qf:
+                            #------------- Input action sieving layer -------------#
+                            sieve_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
+                            for i in range(len(item['act'][1])):
+                                sieve_layer[item['act'][1][i]][i] = 1
+                            qf_h = tf.matmul(action, sieve_layer)
+                            #------------- Action sieving layer End -------------#
+                            
+                            # Concatenate preprocessed state and action
+                            qf_h = tf.concat([critics_h, qf_h], axis=-1)
+
+                            qf_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                            if qf1:
+                                qf = tf.layers.dense(qf_h, 1, name="qf1")
+                                self.qf1 += qf
+                                self.primitive_qf1[layer_name] = qf
+                            if qf2:
+                                qf = tf.layers.dense(qf_h, 1, name="qf2")
+                                self.qf2 += qf
+                                self.primitive_qf2[layer_name] = qf
+                else:
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        self.construct_value_graph(obs, action, primitives, item['tails'], reuse, create_vf, create_qf, qf1, qf2)
+            if 'weight' in name.split('/'):
+                composite_name = name.split('/')[0]
+                layer_name = 'train/'+composite_name if item['main_tail'] else composite_name
+                with tf.variable_scope(layer_name, reuse=reuse):
+                    if self.feature_extraction == "cnn":
+                        critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                        raise NotImplementedError("Image input not supported for now")
+                    else:
+                        critics_h = tf.layers.flatten(obs)
+
+                    #------------- Input observation sieving layer -------------#
+                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                    for i in range(len(item['obs'][1])):
+                        sieve_layer[item['obs'][1][i]][i] = 1
+                    critics_h = tf.matmul(critics_h, sieve_layer)
+                    #------------- Observation sieving layer End -------------#
+
+                    if create_vf:
+                        # Value function
+                        vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        value_fn = tf.layers.dense(vf_h, 1, name="vf")
+                        self.value_fn += value_fn
+                        self.primitive_value[layer_name] = value_fn
+
+                    if create_qf:
+                        #------------- Input action sieving layer -------------#
+                        sieve_layer = np.zeros([action.shape[1], len(item['composite_action_index'])], dtype=np.float32)
+                        for i in range(len(item['composite_action_index'])):
+                            sieve_layer[item['composite_action_index']][i] = 1
+                        qf_h = tf.matmul(action, sieve_layer)
+                        #------------- Action sieving layer End -------------#
+                        
+                        # Concatenate preprocessed state and action
+                        qf_h = tf.concat([critics_h, qf_h], axis=-1)
+
+                        qf_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        if qf1:
+                            qf = tf.layers.dense(qf_h, 1, name="qf1")
+                            self.qf1 += qf
+                            self.primitive_qf1[layer_name] = qf
+                        if qf2:
+                            qf = tf.layers.dense(qf_h, 1, name="qf2")
+                            self.qf2 += qf
+                            self.primitive_qf2[layer_name] = qf
+
+    def step(self, obs, state=None, mask=None, deterministic=False):
+        if deterministic:
+            action, value, neglogp = self.sess.run([self.deterministic_action, self.value_flat, self.neglogp],
+                                                   {self.obs_ph: obs})
+        else:
+            action, value, neglogp = self.sess.run([self.action, self.value_flat, self.neglogp],
+                                                   {self.obs_ph: obs})
+        return action, value, self.initial_state, neglogp
+
+    def proba_step(self, obs, state=None, mask=None):
+        return self.sess.run(self.policy_proba, {self.obs_ph: obs})
+
+    def value(self, obs, state=None, mask=None):
+        return self.sess.run(self.value_flat, {self.obs_ph: obs})
+
+
 class CnnPolicy(FeedForwardPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN)
