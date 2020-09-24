@@ -260,11 +260,11 @@ class SAC_MULTI(OffPolicyRLModel):
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     policy_train_op = policy_optimizer.apply_gradients(grads)
                     #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
-                    for var in tf_util.get_trainable_vars('model/pi'):
-                        tf.summary.histogram(var.name, var)
-                        print("\t",var)
-                    for index, grad in enumerate(grads): 
-                        tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                    # for var in tf_util.get_trainable_vars('model/pi'):
+                    #     tf.summary.histogram(var.name, var)
+                    #     print("\t",var)
+                    # for index, grad in enumerate(grads): 
+                    #     tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -273,9 +273,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                     target_params = tf_util.get_trainable_vars("target/values_fn/vf")
 
-                    for var in target_params:
-                        tf.summary.histogram(var.name, var)
-                        print("\t",var)
+                    # for var in target_params:
+                    #     tf.summary.histogram(var.name, var)
+                    #     print("\t",var)
 
                     # Polyak averaging for target variables
                     self.target_update_op = [
@@ -350,7 +350,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.observations_ph = self.policy_tf.obs_ph
                     # Normalized observation for pixels
                     self.processed_obs_ph = self.policy_tf.processed_obs
-                    tf.summary.histogram('observations', self.processed_obs_ph)
+                    #tf.summary.histogram('observations', self.processed_obs_ph)
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.processed_next_obs_ph = self.target_policy.processed_obs
                     # None
@@ -474,9 +474,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
                         print("Policy optimizee: ")
-                        for var in policy_var_list:
-                            tf.summary.histogram(var.name, var)
-                            print("\t",var)
+                        # for var in policy_var_list:
+                        #     tf.summary.histogram(var.name, var)
+                        #     print("\t",var)
                         policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                         # Value train op
@@ -486,9 +486,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
                         print("Source optimizee: ")
-                        for var in source_params_trainable:
-                            tf.summary.histogram(var.name, var)
-                            print("\t",var)
+                        # for var in source_params_trainable:
+                        #     tf.summary.histogram(var.name, var)
+                        #     print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
                         print("Target optimizee: ")
                         for var in target_params_trainable:
@@ -532,25 +532,16 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
-                        tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
-                        tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
                         tf.summary.scalar('1-1. logp_pi mean', logp_pi_mean)
-                        tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
-                        tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
-                        '''
-                        for name, value in primitives.items():
-                            pi_data = tf_util.get_trainable_vars('model/pi/'+name)
-                            for item in pi_data:
-                                print(item)
-                            #val_data = tf_util.get_trainable_vars('model/pi/'+name)
-                            tf.summary.histogram('model/pi/'+name.split('/')[1], pi_data)
-                            #tf.summary.histogram('model/values_fn/vf/'+name.split('/')[1], val_data)'''
+                        # tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
+                        # tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
+                        tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
+                        # tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
+                        # tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
                         if ent_coef_loss is not None:
                             tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                             tf.summary.scalar('ent_coef', self.ent_coef)
                             tf.summary.scalar('target_ent', self.target_entropy)
-
                         #tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
                 # Retrieve parameters that must be saved
@@ -642,7 +633,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
-                # if random_exploration is set to 0 (normal setting)
+                # if random_exploration is se-loaded_step_numt to 0 (normal setting)
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
