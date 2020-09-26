@@ -260,6 +260,7 @@ class FeedForwardPolicy(SACPolicy):
         self.policy_layers = layers.get('policy',[64,64])
         self.value_layers = layers.get('value',[64,64])
         self.weight = {}
+        self.ST = {}
         self.primitive_actions = {}
         self.primitive_log_std = {}
         self.primitive_value = {}
@@ -403,7 +404,7 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
-    def make_custom_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
+    def make_custom_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False,
                     create_vf=True, create_qf=True):
         """
         Creates the two Q-Values approximator along with the custom Value function
@@ -449,8 +450,8 @@ class FeedForwardPolicy(SACPolicy):
         weight = None
 
         for name in tails:
-            # Weight should change received obs placeholder when succeeding it to connected primitives
             if 'weight' in name.split('/'):
+                item = primitives[name]
                 layer_name = item['layer_name'] if item['main_tail'] else name
                 with tf.variable_scope(layer_name, reuse=reuse):
                     if self.feature_extraction == "cnn":
@@ -458,11 +459,11 @@ class FeedForwardPolicy(SACPolicy):
                         raise NotImplementedError("Image input not supported for now")
                     else:
                         pi_h = tf.layers.flatten(obs)
-                    
+                    obs_dim = obs.shape[1].value
                     #------------- Input observation sieving layer -------------#
-                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                    for i in range(len(item['obs'][1])):
-                        sieve_layer[item['obs'][1][i]][i] = 1
+                    sieve_layer = np.zeros([obs_dim, len(item['obs'][1])], dtype=np.float32)
+                    for i, index in enumerate(item['obs'[1]]):
+                        sieve_layer[index][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
 
@@ -471,25 +472,34 @@ class FeedForwardPolicy(SACPolicy):
                     tf.summary.histogram(name, weight)
                     self.weight[name] = weight
 
-                    state_input = tf.layers.dense(pi_h, len(item['ST'][1], activation=None))
-
-                    obs = #somehow change it wrt state_input prior to formulating connected primitves
+                    if 'ST' in item.keys():
+                        state_input = tf.layers.dense(pi_h, len(item['ST']), activation=None)
+                        self.ST[name] = state_input
+                        shaper = np.zeros([len(item['ST']), obs_dim], dtype=np.float32)
+                        for i, index in enumerate(item['ST']):
+                            shaper[i][index] = 1
+                        st_layer = np.eye(obs_dim, dtype=np.float32)
+                        for index in item['ST']:
+                            st_layer[index][index] = 0
+                        obs_primitive = tf.matmul(obs, st_layer) + tf.matmul(state_input, shaper)
+                    else:
+                        obs_primitive = obs
 
         for name in tails:
             item = primitives[name]
             layer_name = item['layer_name'] if item['main_tail'] else name
-            if item['tails'] == None:                
+            if item['tails'] == None:
                 with tf.variable_scope(layer_name, reuse=reuse):
                     if self.feature_extraction == "cnn":
-                        pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                        pi_h = self.cnn_extractor(obs_primitive, **self.cnn_kwargs)
                         raise NotImplementedError("Image input not supported for now")
                     else:
-                        pi_h = tf.layers.flatten(obs)
+                        pi_h = tf.layers.flatten(obs_primitive)
                     
                     #------------- Input observation sieving layer -------------#
-                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                    for i in range(len(item['obs'][1])):
-                        sieve_layer[item['obs'][1][i]][i] = 1
+                    sieve_layer = np.zeros([obs_primitive.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                    for i, index in enumerate(item['obs'[1]]):
+                        sieve_layer[index][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
 
@@ -509,7 +519,7 @@ class FeedForwardPolicy(SACPolicy):
                         log_std = tf.log(std)
 
                     # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
-                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)    
+                    log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                     #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
                     tf.summary.histogram('log_std_'+name, log_std)
                     log_std_array.append(log_std)
@@ -520,6 +530,8 @@ class FeedForwardPolicy(SACPolicy):
                     tf.summary.merge_all()
             else:
                 with tf.variable_scope(layer_name, reuse=reuse):
+                    # TODO: determine whether to assign transformed state into the lower level primitives
+                    # _, mu_, log_std_ = self.construct_actor_graph(obs_primitive, primitives, item['tails'], total_action_dimension, reuse, non_log)
                     _, mu_, log_std_ = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
                 mu_array.append(mu_)
                 log_std_array.append(log_std_)
@@ -551,8 +563,8 @@ class FeedForwardPolicy(SACPolicy):
 
                         #------------- Input observation sieving layer -------------#
                         sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                        for i in range(len(item['obs'][1])):
-                            sieve_layer[item['obs'][1][i]][i] = 1
+                        for i, index in enumerate(item['obs'[1]]):
+                            sieve_layer[index][i] = 1
                         critics_h = tf.matmul(critics_h, sieve_layer)
                         #------------- Observation sieving layer End -------------#
 
@@ -566,8 +578,8 @@ class FeedForwardPolicy(SACPolicy):
                         if create_qf:
                             #------------- Input action sieving layer -------------#
                             sieve_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
-                            for i in range(len(item['act'][1])):
-                                sieve_layer[item['act'][1][i]][i] = 1
+                            for i, index in enumerate(item['act'[1]]):
+                                sieve_layer[index][i] = 1
                             qf_h = tf.matmul(action, sieve_layer)
                             #------------- Action sieving layer End -------------#
                             
@@ -598,8 +610,8 @@ class FeedForwardPolicy(SACPolicy):
 
                     #------------- Input observation sieving layer -------------#
                     sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                    for i in range(len(item['obs'][1])):
-                        sieve_layer[item['obs'][1][i]][i] = 1
+                    for i, index in enumerate(item['obs'[1]]):
+                        sieve_layer[index][i] = 1
                     critics_h = tf.matmul(critics_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
 
@@ -613,8 +625,8 @@ class FeedForwardPolicy(SACPolicy):
                     if create_qf:
                         #------------- Input action sieving layer -------------#
                         sieve_layer = np.zeros([action.shape[1], len(item['composite_action_index'])], dtype=np.float32)
-                        for i in range(len(item['composite_action_index'])):
-                            sieve_layer[item['composite_action_index']][i] = 1
+                        for i, index in enumerate(item['composite_action_index'[1]]):
+                            sieve_layer[index][i] = 1
                         qf_h = tf.matmul(action, sieve_layer)
                         #------------- Action sieving layer End -------------#
                         
@@ -638,6 +650,9 @@ class FeedForwardPolicy(SACPolicy):
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
+    
+    def get_ST(self, obs):
+        return self.sess.run(self.ST, {self.obs_ph: obs})
 
     def get_primitive_action(self, obs):
         return self.sess.run(self.primitive_actions, {self.obs_ph: obs})

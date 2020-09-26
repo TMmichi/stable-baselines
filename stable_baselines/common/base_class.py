@@ -236,11 +236,10 @@ class BaseRLModel(ABC):
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
 
-    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, layer_structure, loaded_policy=None, load_value=True):
+    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, 
+                                    layer_structure, state_transformation_index=None, loaded_policy=None, load_value=True):
         # TODO 1: Store level of the top hierarchy
         # TODO 2: Check if there exists same name @ top level of hierarchy
-        # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
-        # TODO 3-2: else -> check whether given name is identical to the name of the weight of the submodule
         '''
         Returns info of the primitive as a dictionary
 
@@ -252,10 +251,11 @@ class BaseRLModel(ABC):
         :param act_range: (dict or int) a dictionary containing min/max bound of the action range. If int, then all dimensions of the range fixed to [0,1]
         :param act_index: ([int, ...]) a list of indices of the action for the primitive.
         :param layer_structure: (dict) layer structure of the primitive policy/value
+        :param state_transformation_index: ([int, ...]) a list of indices of the state transformation 
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
         :param load_value: (bool) load separate value network for the primitive
-        :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
         '''
+        info_dict = {}
         if isinstance(loaded_policy, type(None)):
             assert not freeze, \
                 '\n\t\033[91m[ERROR]: Newly appointed primitive at training time cannot be frozen\033[0m'
@@ -264,6 +264,7 @@ class BaseRLModel(ABC):
             if name == 'weight':
                 self.top_hierarchy_level = level
                 name = self.composite_primitive_name + "/" + name
+                info_dict['ST'] = state_transformation_index
             layer_name = '/'.join(['train','level'+str(level)+'_'+name])
             primitive_name = '/'.join(['level'+str(level)+'_'+name])
             self.tails.append(primitive_name)
@@ -362,7 +363,14 @@ class BaseRLModel(ABC):
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
+        info_dict['obs'] = obs
+        info_dict['act'] = act
+        info_dict['layer'] = {'policy': policy_layer_structure, 'value': value_layer_structure}
+        info_dict['layer_name'] = layer_name
+        info_dict['tails'] = tails
+        info_dict['main_tail'] = main_tail
+        info_dict['load_value'] = load_value
+        self.primitives[primitive_name] = info_dict
         
     @staticmethod
     def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value):
