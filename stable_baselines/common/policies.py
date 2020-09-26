@@ -614,8 +614,7 @@ class HierarchicalPolicy(ActorCriticPolicy):
         self.policy_layers = layers.get('policy',[64,64])
         self.value_layers = layers.get('value',[64,64])
 
-        loaded = True if 'loaded' in primitives.keys() else False
-        if loaded:
+        #loaded = True if 'loaded' in primitives.keys() else False
 
         with tf.variable_scope("model", reuse=reuse):
 

@@ -469,7 +469,7 @@ class FeedForwardPolicy(SACPolicy):
 
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
-                    tf.summary.histogram(name, weight)
+                    tf.summary.histogram(" ", weight)
                     self.weight[name] = weight
 
                     if 'ST' in item.keys():
