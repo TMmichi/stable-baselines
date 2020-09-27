@@ -70,6 +70,8 @@ class HERGoalEnvWrapper(object):
         if isinstance(self.observation_space, spaces.MultiDiscrete):
             # Special case for multidiscrete
             return np.concatenate([[int(obs_dict[key])] for key in KEY_ORDER])
+        for key in KEY_ORDER:
+            print(obs_dict[key])
         return np.concatenate([obs_dict[key] for key in KEY_ORDER])
 
     def convert_obs_to_dict(self, observations):
