@@ -385,8 +385,8 @@ class FeedForwardPolicy(SACPolicy):
         #log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
         tf.summary.histogram('mu_MCP_lin', mu_MCP[:,0])
         tf.summary.histogram('mu_MCP_ang', mu_MCP[:,1])
-        tf.summary.histogram('log_std_MCP_lin', log_std_MCP[:,0])
-        tf.summary.histogram('log_std_MCP_ang', log_std_MCP[:,1])
+        tf.summary.histogram('std_MCP_lin', tf.exp(log_std_MCP[:,0]))
+        tf.summary.histogram('std_MCP_ang', tf.exp(log_std_MCP[:,1]))
         tf.summary.merge_all()
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
@@ -468,8 +468,9 @@ class FeedForwardPolicy(SACPolicy):
                         #------------- Observation sieving layer End -------------#
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='sigmoid')
-                        tf.summary.histogram(name, weight)
+
+                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                        tf.summary.histogram(" ", weight)
                         self.weight[name] = weight
                 else:
                     with tf.variable_scope(layer_name, reuse=reuse):
@@ -491,7 +492,7 @@ class FeedForwardPolicy(SACPolicy):
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
                         #mu_ = tf.tanh(mu_)
                         #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
-                        tf.summary.histogram('mu_'+name, mu_)
+                        tf.summary.histogram('mu', mu_)
                         mu_array.append(mu_)
                         self.primitive_actions[name] = mu_
 
@@ -504,7 +505,7 @@ class FeedForwardPolicy(SACPolicy):
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)    
                         #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
-                        tf.summary.histogram('log_std_'+name, log_std)
+                        tf.summary.histogram('std', tf.exp(log_std))
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
