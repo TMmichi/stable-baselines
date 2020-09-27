@@ -468,7 +468,7 @@ class FeedForwardPolicy(SACPolicy):
                         #------------- Observation sieving layer End -------------#
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='sigmoid')
                         tf.summary.histogram(name, weight)
                         self.weight[name] = weight
                 else:
@@ -489,7 +489,7 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
-                        mu_ = tf.tanh(mu_)
+                        #mu_ = tf.tanh(mu_)
                         #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
                         tf.summary.histogram('mu_'+name, mu_)
                         mu_array.append(mu_)
