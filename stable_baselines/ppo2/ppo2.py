@@ -10,7 +10,7 @@ from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import ActorCriticPolicy, RecurrentActorCriticPolicy
 from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.tf_util import total_episode_reward_logger
-from stable_baselines.common.math_util import safe_mean
+from stable_baselines.common.math_util import safe_mean, unscale_action
 
 class PPO2(ActorCriticRLModel):
     """
@@ -235,6 +235,7 @@ class PPO2(ActorCriticRLModel):
                 self.act_model = act_model
                 self.step = act_model.step
                 self.proba_step = act_model.proba_step
+                self.logstd = act_model.get_logstd
                 self.value = act_model.value
                 self.initial_state = act_model.initial_state
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
@@ -299,7 +300,7 @@ class PPO2(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="PPO2",
+    def learn(self, total_timesteps, loaded_step_num=0, callback=None, log_interval=1, tb_log_name="PPO2",
               reset_num_timesteps=True, save_interval=0, save_path=None):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
@@ -387,11 +388,11 @@ class PPO2(ActorCriticRLModel):
                                                 true_reward.reshape((self.n_envs, self.n_steps)),
                                                 masks.reshape((self.n_envs, self.n_steps)),
                                                 writer, self.num_timesteps)
-                
+                print(update, n_updates)
                 if save_interval and save_path != None:
-                    if (self.n_steps+1) % save_interval == 0 and self.n_steps:
+                    if (update+1) % int(save_interval/self.n_batch) == 0 and update:
                         print("saved")
-                        self.save(save_path+"/policy_"+str(self.n_steps+1))
+                        self.save(save_path+"/policy_"+str(update*self.n_batch+loaded_step_num+1))
 
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, returns)
@@ -480,10 +481,15 @@ class Runner(AbstractEnvRunner):
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
+
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
-            if isinstance(self.env.action_space, gym.spaces.Box):
-                clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            if self.model.act_model.squash:
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = unscale_action(self.env.action_space, clipped_actions)
+            else:
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

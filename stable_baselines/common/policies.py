@@ -80,11 +80,11 @@ def mlp_extractor(flat_observations, net_arch, act_fun):
     for idx, (pi_layer_size, vf_layer_size) in enumerate(zip_longest(policy_only_layers, value_only_layers)):
         if pi_layer_size is not None:
             assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
-            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)))
+            latent_policy = act_fun(linear(latent_policy, "pi/fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)))
 
         if vf_layer_size is not None:
             assert isinstance(vf_layer_size, int), "Error: net_arch[-1]['vf'] must only contain integers."
-            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)))
+            latent_value = act_fun(linear(latent_value, "values_fn/vf/fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)))
 
     return latent_policy, latent_value
 
@@ -227,11 +227,11 @@ class ActorCriticPolicy(BasePolicy):
         self._action = None
         self._deterministic_action = None
 
-    def _setup_init(self):
+    def _setup_init(self, squash=False):
         """Sets up the distributions, actions, and value."""
         with tf.variable_scope("output", reuse=True):
             assert self.policy is not None and self.proba_distribution is not None and self.value_fn is not None
-            self._action = self.proba_distribution.sample()
+            self._action = self.proba_distribution.sample(squash)
             self._deterministic_action = self.proba_distribution.mode()
             self._neglogp = self.proba_distribution.neglogp(self.action)
             if isinstance(self.proba_distribution, CategoricalProbabilityDistribution):
@@ -540,7 +540,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=(feature_extraction == "cnn"))
 
-        self._kwargs_check(feature_extraction, kwargs)
+        #self._kwargs_check(feature_extraction, kwargs)
 
         if layers is not None:
             warnings.warn("Usage of the `layers` parameter is deprecated! Use net_arch instead "
@@ -560,12 +560,13 @@ class FeedForwardPolicy(ActorCriticPolicy):
             else:
                 pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
 
-            self._value_fn = linear(vf_latent, 'vf', 1)
+            self._value_fn = linear(vf_latent, 'values_fn/vf/vf', 1)
 
-            self._proba_distribution, self._policy, self.q_value = \
-                self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01)
-
-        self._setup_init()
+            self._proba_distribution, self._policy, self.q_value, self.logstd = \
+                self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01, std_from_obs=True)
+        
+        self.squash = kwargs.get('squash', False)
+        self._setup_init(self.squash)
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
@@ -575,6 +576,11 @@ class FeedForwardPolicy(ActorCriticPolicy):
             action, value, neglogp = self.sess.run([self.action, self.value_flat, self.neglogp],
                                                    {self.obs_ph: obs})
         return action, value, self.initial_state, neglogp
+    
+    def get_logstd(self, obs):
+        obs = np.array(obs)
+        obs = obs.reshape((-1,) + obs.shape)
+        return self.sess.run([self.logstd], {self.obs_ph: obs})
 
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run(self.policy_proba, {self.obs_ph: obs})

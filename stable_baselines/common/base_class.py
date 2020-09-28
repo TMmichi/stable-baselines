@@ -13,6 +13,7 @@ import numpy as np
 import tensorflow as tf
 
 from stable_baselines.common.misc_util import set_global_seeds
+from stable_baselines.common.math_util import unscale_action
 from stable_baselines.common.save_util import data_to_json, json_to_data, params_to_bytes, bytes_to_params
 from stable_baselines.common.policies import get_policy_from_name, ActorCriticPolicy
 from stable_baselines.common.runners import AbstractEnvRunner
@@ -426,7 +427,7 @@ class BaseRLModel(ABC):
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
             if load_value:
-                if name.find('target/values_fn/vf/fc') > -1:
+                if name.find('model/values_fn/vf/fc') > -1:
                     if name.find('bias') > -1:
                         value_layer_structure.append(value.shape[0])
         
@@ -718,7 +719,7 @@ class BaseRLModel(ABC):
                 # Keep track which variables are updated
                 not_updated_variables.remove(param_name)
                 print("Loaded param: ",param_name)
-            except Exception:
+            except Exception as e:
                 print("Param not in graph: ",param_name)
 
         for param_name in not_updated_variables:
@@ -1155,8 +1156,12 @@ class ActorCriticRLModel(BaseRLModel):
 
         clipped_actions = actions
         # Clip the actions to avoid out of bound error
-        if isinstance(self.action_space, gym.spaces.Box):
-            clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+        if self.policy.squash:
+            if isinstance(self.action_space, gym.spaces.Box):
+                clipped_actions = unscale_action(self.action_space, tf.tanh(clipped_actions))
+        else:
+            if isinstance(self.action_space, gym.spaces.Box):
+                clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
         if not vectorized_env:
             if state is not None:
@@ -1164,6 +1169,7 @@ class ActorCriticRLModel(BaseRLModel):
             clipped_actions = clipped_actions[0]
 
         return clipped_actions, states
+
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         if state is None:

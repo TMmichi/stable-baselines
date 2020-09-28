@@ -474,9 +474,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
                         print("Policy optimizee: ")
-                        # for var in policy_var_list:
-                        #     tf.summary.histogram(var.name, var)
-                        #     print("\t",var)
+                        for var in policy_var_list:
+                            tf.summary.histogram(var.name, var)
+                            print("\t",var)
                         policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                         # Value train op
@@ -486,9 +486,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
                         print("Source optimizee: ")
-                        # for var in source_params_trainable:
-                        #     tf.summary.histogram(var.name, var)
-                        #     print("\t",var)
+                        for var in source_params_trainable:
+                            tf.summary.histogram(var.name, var)
+                            print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
                         print("Target optimizee: ")
                         for var in target_params_trainable:

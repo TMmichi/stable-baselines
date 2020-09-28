@@ -503,7 +503,7 @@ class FeedForwardPolicy(SACPolicy):
                             log_std = tf.log(std)
 
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
-                        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)    
+                        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                         #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
                         tf.summary.histogram('std', tf.exp(log_std))
                         log_std_array.append(log_std)

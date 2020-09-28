@@ -5,6 +5,9 @@ from gym import spaces
 
 from stable_baselines.common.tf_layers import linear
 
+LOG_STD_MAX = 10
+LOG_STD_MIN = -20
+
 
 class ProbabilityDistribution(object):
     """
@@ -235,12 +238,17 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         """
         return self.probability_distribution_class()(flat)
 
-    def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        mean = linear(pi_latent_vector, 'pi', self.size, init_scale=init_scale, init_bias=init_bias)
-        logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.zeros_initializer())
-        pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+    def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0, std_from_obs=False):
+        mean = linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
-        return self.proba_distribution_from_flat(pdparam), mean, q_values
+        if std_from_obs:
+            logstd = linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias)
+            logstd = tf.clip_by_value(logstd, LOG_STD_MIN, LOG_STD_MAX)
+            pdparam = tf.concat([mean, logstd], axis=1)
+        else:
+            logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.zeros_initializer())
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+        return self.proba_distribution_from_flat(pdparam), mean, q_values, logstd
 
     def param_shape(self):
         return [2 * self.size]
@@ -387,9 +395,10 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
         """
         self.flat = flat
         mean, logstd = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=2, value=flat)
-        self.mean = mean
         self.logstd = logstd
         self.std = tf.exp(logstd)
+        self.mean = mean
+        
         super(DiagGaussianProbabilityDistribution, self).__init__()
 
     def flatparam(self):
@@ -412,11 +421,15 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
     def entropy(self):
         return tf.reduce_sum(self.logstd + .5 * np.log(2.0 * np.pi * np.e), axis=-1)
 
-    def sample(self):
+    def sample(self, squash=False):
         # Bounds are taken into acount outside this class (during training only)
         # Otherwise, it changes the distribution and breaks PPO2 for instance
-        return self.mean + self.std * tf.random_normal(tf.shape(self.mean),
-                                                       dtype=self.mean.dtype)
+        #self.std = tf.Print(self.std,[self.std],"std")
+        #self.mean = tf.Print(self.mean,[self.mean],"mean")
+        if squash:
+            return tf.tanh(self.mean + self.std * tf.random_normal(tf.shape(self.mean), dtype=self.mean.dtype))
+        else:
+            return self.mean + self.std * tf.random_normal(tf.shape(self.mean), dtype=self.mean.dtype)
 
     @classmethod
     def fromflat(cls, flat):
