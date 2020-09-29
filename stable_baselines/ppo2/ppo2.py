@@ -489,8 +489,12 @@ class Runner(AbstractEnvRunner):
                 if isinstance(self.env.action_space, gym.spaces.Box):
                     clipped_actions = unscale_action(self.env.action_space, clipped_actions)
             else:
-                if isinstance(self.env.action_space, gym.spaces.Box):
-                    clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+                if self.model.act_model.box_dist=='beta':
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        clipped_actions = unscale_action(self.env.action_space, clipped_actions/2+0.5)
+                else:
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

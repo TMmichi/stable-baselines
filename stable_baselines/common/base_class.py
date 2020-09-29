@@ -1158,11 +1158,15 @@ class ActorCriticRLModel(BaseRLModel):
         # Clip the actions to avoid out of bound error
         try:
             if self.act_model.squash:
-                if isinstance(self.action_space, gym.spaces.Box):
-                    clipped_actions = unscale_action(self.action_space, clipped_actions)
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = unscale_action(self.env.action_space, clipped_actions)
             else:
-                if isinstance(self.action_space, gym.spaces.Box):
-                    clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+                if self.act_model.box_dist=='beta':
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        clipped_actions = unscale_action(self.env.action_space, clipped_actions/2+0.5)
+                else:
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
         except Exception:
             if isinstance(self.action_space, gym.spaces.Box):
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
