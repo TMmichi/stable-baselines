@@ -404,14 +404,22 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
     def flatparam(self):
         return self.flat
 
-    def mode(self):
+    def mode(self, squash=False):
         # Bounds are taken into account outside this class (during training only)
-        return self.mean
+        if squash:
+            return tf.tanh(self.mean)
+        else:
+            return self.mean
 
-    def neglogp(self, x):
-        return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
-               + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
-               + tf.reduce_sum(self.logstd, axis=-1)
+    def neglogp(self, x, squash=False):
+        if squash:
+            return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
+                + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
+                + tf.reduce_sum(self.logstd, axis=-1) + tf.reduce_sum(tf.log(1-tf.tanh(x)**2+1e-6), axis=-1)
+        else:
+            return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
+                + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
+                + tf.reduce_sum(self.logstd, axis=-1)
 
     def kl(self, other):
         assert isinstance(other, DiagGaussianProbabilityDistribution)

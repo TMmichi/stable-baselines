@@ -232,7 +232,7 @@ class ActorCriticPolicy(BasePolicy):
         with tf.variable_scope("output", reuse=True):
             assert self.policy is not None and self.proba_distribution is not None and self.value_fn is not None
             self._action = self.proba_distribution.sample(squash)
-            self._deterministic_action = self.proba_distribution.mode()
+            self._deterministic_action = self.proba_distribution.mode(squash)
             self._neglogp = self.proba_distribution.neglogp(self.action)
             if isinstance(self.proba_distribution, CategoricalProbabilityDistribution):
                 self._policy_proba = tf.nn.softmax(self.policy)

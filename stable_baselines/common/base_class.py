@@ -1153,15 +1153,19 @@ class ActorCriticRLModel(BaseRLModel):
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions, _, states, _ = self.step(observation, state, mask, deterministic=deterministic)
-
+        
         clipped_actions = actions
         # Clip the actions to avoid out of bound error
-        if self.policy.squash:
+        try:
+            if self.act_model.squash:
+                if isinstance(self.action_space, gym.spaces.Box):
+                    clipped_actions = unscale_action(self.action_space, clipped_actions)
+            else:
+                if isinstance(self.action_space, gym.spaces.Box):
+                    clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+        except Exception:
             if isinstance(self.action_space, gym.spaces.Box):
-                clipped_actions = unscale_action(self.action_space, tf.tanh(clipped_actions))
-        else:
-            if isinstance(self.action_space, gym.spaces.Box):
-                clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+                    clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
         if not vectorized_env:
             if state is not None:
@@ -1284,6 +1288,7 @@ class ActorCriticRLModel(BaseRLModel):
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
+
         model.set_env(env)
         model.setup_model()
 
@@ -1376,6 +1381,7 @@ class OffPolicyRLModel(BaseRLModel):
         model.load_parameters(params, exact_match=False)
 
         return model
+
 
 class _UnvecWrapper(VecEnvWrapper):
     def __init__(self, venv):
