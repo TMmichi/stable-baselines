@@ -576,7 +576,6 @@ class FeedForwardPolicy(ActorCriticPolicy):
             elif self.box_dist == 'beta':
                 self._proba_distribution, self._policy, self.q_value = \
                     self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.3)
-            
         
         self.squash = kwargs.get('squash', False)
         self._setup_init()

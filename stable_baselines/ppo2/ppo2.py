@@ -491,7 +491,9 @@ class Runner(AbstractEnvRunner):
             else:
                 if self.model.act_model.box_dist=='beta':
                     if isinstance(self.env.action_space, gym.spaces.Box):
-                        clipped_actions = unscale_action(self.env.action_space, clipped_actions/2+0.5)
+                        if clipped_actions > 1 or clipped_actions < 0:
+                            print("WARNING: clipped action have an invalid value of",clipped_actions)
+                        clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
                 else:
                     if isinstance(self.env.action_space, gym.spaces.Box):
                         clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)

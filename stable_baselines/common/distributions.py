@@ -539,13 +539,14 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         self.beta = beta
         # self.alpha = tf.Print(self.alpha,[self.alpha],'alpha:',summarize=-1)
         # self.beta = tf.Print(self.beta,[self.beta],'beta:',summarize=-1)
-        self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=True, allow_nan_stats=False)
+        self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=False, allow_nan_stats=False)
         super(BetaProbabilityDistribution, self).__init__()
 
     def flatparam(self):
         return self.flat
 
     def mode(self):
+        # TODO: mode of beta not equal to mean, but deterministic action shall have the value of mean
         return self.dist.mean()
 
     def neglogp(self, x):
