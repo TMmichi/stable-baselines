@@ -546,6 +546,7 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         return self.flat
 
     def mode(self):
+        # TODO: mode of beta not equal to mean, but deterministic action shall have the value of mean
         return self.dist.mean()
 
     def neglogp(self, x):
