@@ -491,6 +491,8 @@ class Runner(AbstractEnvRunner):
             else:
                 if self.model.act_model.box_dist=='beta':
                     if isinstance(self.env.action_space, gym.spaces.Box):
+                        if np.any(np.logical_or(clipped_actions>1,clipped_actions<0)):
+                            print("WARNING: clipped action have an invalid value of",clipped_actions)
                         clipped_actions = unscale_action(self.env.action_space, clipped_actions/2+0.5)
                 else:
                     if isinstance(self.env.action_space, gym.spaces.Box):
