@@ -218,13 +218,14 @@ class MultiCategoricalProbabilityDistributionType(ProbabilityDistributionType):
 
 
 class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
-    def __init__(self, size):
+    def __init__(self, size, squash=False):
         """
         The probability distribution type for multivariate Gaussian input
 
         :param size: (int) the number of dimensions of the multivariate gaussian
         """
         self.size = size
+        self.squash = squash
 
     def probability_distribution_class(self):
         return DiagGaussianProbabilityDistribution
@@ -236,7 +237,7 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         :param flat: ([float]) the flat probabilities
         :return: (ProbabilityDistribution) the instance of the ProbabilityDistribution associated
         """
-        return self.probability_distribution_class()(flat)
+        return self.probability_distribution_class()(flat, self.squash)
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0, std_from_obs=False):
         mean = linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)
@@ -300,8 +301,8 @@ class BetaProbabilityDistributionType(ProbabilityDistributionType):
         return BetaProbabilityDistribution
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        alpha = tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias)) + 1e-1
-        beta = tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias)) + 1e-1
+        alpha = tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias)) + 1
+        beta = tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias)) + 1
         pdparam = tf.concat([alpha, beta], axis=1)
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
         return self.proba_distribution_from_flat(pdparam), pdparam, q_values
@@ -416,13 +417,14 @@ class MultiCategoricalProbabilityDistribution(ProbabilityDistribution):
 
 
 class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
-    def __init__(self, flat):
+    def __init__(self, flat, squash=False):
         """
         Probability distributions from multivariate Gaussian input
 
         :param flat: ([float]) the multivariate Gaussian input data
         """
         self.flat = flat
+        self.squash = squash
         mean, logstd = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=2, value=flat)
         self.logstd = logstd
         self.std = tf.exp(logstd)
@@ -433,15 +435,12 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
     def flatparam(self):
         return self.flat
 
-    def mode(self, squash=False):
+    def mode(self):
         # Bounds are taken into account outside this class (during training only)
-        if squash:
-            return tf.tanh(self.mean)
-        else:
-            return self.mean
+        return tf.tanh(self.mean) if self.squash else self.mean
 
-    def neglogp(self, x, squash=False):
-        if squash:
+    def neglogp(self, x):
+        if self.squash:
             return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
                 + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
                 + tf.reduce_sum(self.logstd, axis=-1) + tf.reduce_sum(tf.log(1-tf.tanh(x)**2+1e-6), axis=-1)
@@ -463,7 +462,7 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
         # Otherwise, it changes the distribution and breaks PPO2 for instance
         #self.std = tf.Print(self.std,[self.std],"std")
         #self.mean = tf.Print(self.mean,[self.mean],"mean")
-        if squash:
+        if self.squash:
             return tf.tanh(self.mean + self.std * tf.random_normal(tf.shape(self.mean), dtype=self.mean.dtype))
         else:
             return self.mean + self.std * tf.random_normal(tf.shape(self.mean), dtype=self.mean.dtype)
@@ -537,8 +536,6 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         alpha, beta = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=2, value=flat)
         self.alpha = alpha
         self.beta = beta
-        # self.alpha = tf.Print(self.alpha,[self.alpha],'alpha:',summarize=-1)
-        # self.beta = tf.Print(self.beta,[self.beta],'beta:',summarize=-1)
         self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=False, allow_nan_stats=True)
         super(BetaProbabilityDistribution, self).__init__()
 
@@ -573,7 +570,7 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         return cls(flat)
 
 
-def make_proba_dist_type(ac_space, box_dist='gaussian'):
+def make_proba_dist_type(ac_space, box_dist='gaussian', squash=False):
     """
     return an instance of ProbabilityDistributionType for the correct type of action space
 
@@ -583,7 +580,7 @@ def make_proba_dist_type(ac_space, box_dist='gaussian'):
     if isinstance(ac_space, spaces.Box):
         assert len(ac_space.shape) == 1, "Error: the action space must be a vector"
         if box_dist=='gaussian':
-            return DiagGaussianProbabilityDistributionType(ac_space.shape[0])
+            return DiagGaussianProbabilityDistributionType(ac_space.shape[0], squash)
         elif box_dist=='beta':
             return BetaProbabilityDistributionType(ac_space.shape[0])
         else:
