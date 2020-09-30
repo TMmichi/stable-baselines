@@ -544,7 +544,7 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
 
     def mode(self):
         # TODO: mode of beta not equal to mean, but deterministic action shall have the value of mean
-        return self.dist.mean()
+        return self.dist.mode()
 
     def neglogp(self, x):
         return tf.reduce_sum(-self.dist.log_prob(x), axis=-1)
