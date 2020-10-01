@@ -571,7 +571,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
                     self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01, std_from_obs=True)
             elif self.box_dist == 'beta':
                 self._proba_distribution, self._policy, self.q_value = \
-                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.3)
+                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=1)
 
         self._setup_init()
 
