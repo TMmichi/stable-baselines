@@ -477,6 +477,8 @@ class Runner(AbstractEnvRunner):
         ep_infos = []
         for _ in range(self.n_steps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            alpha, beta = self.model.act_model.proba_step(self.obs)
+
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
@@ -491,12 +493,13 @@ class Runner(AbstractEnvRunner):
             else:
                 if self.model.act_model.box_dist=='beta':
                     if isinstance(self.env.action_space, gym.spaces.Box):
-                        #if clipped_actions > 1 or clipped_actions < 0:
-                        #    print("WARNING: clipped action have an invalid value of",clipped_actions)
+                        if np.any(np.logical_or(clipped_actions > 1, clipped_actions<0)):
+                            print("WARNING: clipped action have an invalid value of",clipped_actions)
                         clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
                 else:
                     if isinstance(self.env.action_space, gym.spaces.Box):
                         clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            print('action: {0}\t'.format(clipped_actions), "params: ",alpha, beta)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs
