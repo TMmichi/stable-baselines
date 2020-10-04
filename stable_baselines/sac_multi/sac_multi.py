@@ -63,7 +63,7 @@ class SAC_MULTI(OffPolicyRLModel):
     def __init__(self, policy, env, layers={}, gamma=0.99, learning_rate=1e-4, buffer_size=50000,
                  learning_starts=5000, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
-                 gradient_steps=1, target_entropy='auto', action_noise=None,
+                 gradient_steps=1, target_entropy='auto', box_dist='gaussian', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
                  seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
@@ -100,6 +100,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.policy_tf = None
+        self.box_dist = box_dist
         self.layers = layers
         self.target_entropy = target_entropy
         self.full_tensorboard_log = full_tensorboard_log
@@ -167,7 +168,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
-                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                    if self.box_dist == 'gaussian':
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                    elif self.box_dist == 'beta':
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -640,14 +644,19 @@ class SAC_MULTI(OffPolicyRLModel):
                     unscaled_action = self.env.action_space.sample()
                     action = scale_action(self.action_space, unscaled_action)
                 else:
-                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
+                    action = action.flatten()
                     
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # inferred actions need to be transformed to environment action_space before stepping
-                    unscaled_action = unscale_action(self.action_space, action)
+                    # unscaled_action = unscale_action(self.action_space, action)
+                    unscaled_action = action * 2 - 1
+                    if step % 100 == 0:
+                        print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
 
                 assert action.shape == self.env.action_space.shape
 

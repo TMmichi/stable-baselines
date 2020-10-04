@@ -477,7 +477,7 @@ class Runner(AbstractEnvRunner):
         ep_infos = []
         for _ in range(self.n_steps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
-            alpha, beta = self.model.act_model.proba_step(self.obs)
+            alpha, beta, mu, var = self.model.act_model.proba_step(self.obs)
 
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
@@ -499,7 +499,12 @@ class Runner(AbstractEnvRunner):
                 else:
                     if isinstance(self.env.action_space, gym.spaces.Box):
                         clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            print('action: {0}\t'.format(clipped_actions), "params: ",alpha, beta)
+            print('')
+            print('action: {0}\t'.format(clipped_actions.reshape((-1))))
+            print("alphas: ", alpha.reshape((-1)))
+            print('betas: ', beta.reshape((-1)))
+            print('mus: ', mu.reshape((-1)))
+            print('vars: ', var.reshape((-1)))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

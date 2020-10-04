@@ -5,7 +5,7 @@ import numpy as np
 from gym.spaces import Box
 
 from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy
-from stable_baselines.common.tf_layers import mlp
+from stable_baselines.common.tf_layers import mlp, linear
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
@@ -326,6 +326,40 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
 
+    def make_beta_actor(self, obs=None, reuse=False, scope="pi"):
+        if obs is None:
+            obs = self.processed_obs
+
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+            else:
+                pi_h = tf.layers.flatten(obs)
+
+            pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
+
+            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0.3))*0.76+0.115
+            var = tf.math.sigmoid(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=-0.3))/101
+            self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
+
+        self.mu_ = mu_
+        self.std = std = tf.exp(log_std)
+        tf.summary.merge_all()
+
+        self.alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+        self.beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+
+        dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
+        
+        pi_ = dist.sample()
+        logp_pi = dist.log_prob(pi_)
+        self.entropy = dist.entropy()
+        
+        self.policy = policy = pi_
+        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+
+        return deterministic_policy, policy, logp_pi
+
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                      create_vf=True, create_qf=True):
         if obs is None:
@@ -639,8 +673,11 @@ class FeedForwardPolicy(SACPolicy):
     def get_primitive_log_std(self, obs):
         return self.sess.run(self.primitive_log_std, {self.obs_ph: obs})
 
-    def proba_step(self, obs, state=None, mask=None):
-        return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})
+    def proba_step(self, obs, state=None, mask=None, beta=False):
+        if beta:
+            return self.sess.run([self.policy, self.act_mu, self.mu_, self.std, self.alpha, self.beta], {self.obs_ph: obs})
+        else:
+            return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})
 
 
 class CnnPolicy(FeedForwardPolicy):

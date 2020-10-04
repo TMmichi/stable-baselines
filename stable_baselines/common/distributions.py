@@ -301,9 +301,15 @@ class BetaProbabilityDistributionType(ProbabilityDistributionType):
         return BetaProbabilityDistribution
 
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
-        alpha = tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias)) + 1
-        beta = tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias)) + 1
-        pdparam = tf.concat([alpha, beta], axis=1)
+        # alpha = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias))*5)
+        # beta = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias))*5)
+        mu = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)) * 0.772 + 0.114
+        var = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense_0', self.size, init_scale=init_scale, init_bias=init_bias))/100
+
+        alpha = -mu*tf.math.divide_no_nan((var+mu**2-mu),var)
+        beta = (mu-1)*tf.math.divide_no_nan((var+mu**2-mu),var)
+        
+        pdparam = tf.concat([alpha, beta, mu, var], axis=1)
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
         return self.proba_distribution_from_flat(pdparam), pdparam, q_values
 
@@ -533,9 +539,11 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         :param logits: ([float]) the Beta input data
         """
         self.flat = flat
-        alpha, beta = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=2, value=flat)
+        alpha, beta, mu, var = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=4, value=flat)
         self.alpha = alpha
         self.beta = beta
+        self.mu = mu
+        self.var = var
         self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=False, allow_nan_stats=True)
         super(BetaProbabilityDistribution, self).__init__()
 
