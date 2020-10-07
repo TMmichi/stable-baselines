@@ -475,9 +475,8 @@ class Runner(AbstractEnvRunner):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
         mb_states = self.states
         ep_infos = []
-        for _ in range(self.n_steps):
+        for iteration in range(self.n_steps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
-            alpha, beta, mu, var = self.model.act_model.proba_step(self.obs)
 
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
@@ -499,12 +498,15 @@ class Runner(AbstractEnvRunner):
                 else:
                     if isinstance(self.env.action_space, gym.spaces.Box):
                         clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            print('')
-            print('action: {0}\t'.format(clipped_actions.reshape((-1))))
-            print("alphas: ", alpha.reshape((-1)))
-            print('betas: ', beta.reshape((-1)))
-            print('mus: ', mu.reshape((-1)))
-            print('vars: ', var.reshape((-1)))
+            
+            if iteration == self.n_steps-1:
+                alpha, beta, mu, var = self.model.act_model.proba_step(self.obs)
+                print('steps: ', self.n_steps)
+                print('\taction: {0}\t'.format(clipped_actions.reshape((-1))))
+                print("\talphas: ", alpha.reshape((-1)))
+                print('\tbetas: ', beta.reshape((-1)))
+                print('\tmus: ', mu.reshape((-1)))
+                print('\tvars: ', var.reshape((-1)))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

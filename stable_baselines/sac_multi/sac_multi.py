@@ -264,11 +264,11 @@ class SAC_MULTI(OffPolicyRLModel):
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     policy_train_op = policy_optimizer.apply_gradients(grads)
                     #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
-                    # for var in tf_util.get_trainable_vars('model/pi'):
-                    #     tf.summary.histogram(var.name, var)
-                    #     print("\t",var)
-                    # for index, grad in enumerate(grads): 
-                    #     tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                    for var in tf_util.get_trainable_vars('model/pi'):
+                        tf.summary.histogram(var.name, var)
+                        print("\t",var)
+                    for index, grad in enumerate(grads): 
+                        tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -565,6 +565,10 @@ class SAC_MULTI(OffPolicyRLModel):
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
+        if np.any(np.isnan(batch_actions)):
+            print("NAN in batch_actions:")
+            print(batch_actions)
+
         feed_dict = {
             self.observations_ph: batch_obs,
             self.actions_ph: batch_actions,
@@ -603,6 +607,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
+        self.num_timesteps += loaded_step_num
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
@@ -632,12 +637,14 @@ class SAC_MULTI(OffPolicyRLModel):
 
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
+            nan_num = 0
+            data_past = []
 
-            for step in range(total_timesteps):
+            for step in range(total_timesteps - loaded_step_num):
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
-                # if random_exploration is se-loaded_step_numt to 0 (normal setting)
+                # if random_exploration is set to 0 (normal setting)
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
@@ -647,7 +654,13 @@ class SAC_MULTI(OffPolicyRLModel):
                     # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                     action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
                     action = action.flatten()
-                    
+                    if np.any(np.isnan(mode)):
+                        nan_num += 1
+                        print(data_past)
+                        action[np.isnan(action)] = 0
+                        if nan_num > 100:
+                            quit()
+                    data_past = [action, mode, mu, std, alpha, beta] 
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:
@@ -660,12 +673,13 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
-                try:
-                    weight = self.policy_tf.get_weight(obs[None])
-                    new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
-                except Exception:
-                    new_obs, reward, done, info = self.env.step(unscaled_action)
-
+                # try:
+                #     weight = self.policy_tf.get_weight(obs[None])
+                #     new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
+                # except Exception:
+                #     new_obs, reward, done, info = self.env.step(unscaled_action)
+                
+                new_obs, reward, done, info = self.env.step(unscaled_action)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards

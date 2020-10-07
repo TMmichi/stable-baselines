@@ -303,8 +303,8 @@ class BetaProbabilityDistributionType(ProbabilityDistributionType):
     def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0):
         # alpha = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias))*5)
         # beta = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias))*5)
-        mu = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)) * 0.772 + 0.114
-        var = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense_0', self.size, init_scale=init_scale, init_bias=init_bias))/100
+        mu = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=0.3)) * 0.770 + 0.117
+        var = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense_0', self.size, init_scale=init_scale, init_bias=-0.3))/100
 
         alpha = -mu*tf.math.divide_no_nan((var+mu**2-mu),var)
         beta = (mu-1)*tf.math.divide_no_nan((var+mu**2-mu),var)
@@ -539,33 +539,39 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         :param logits: ([float]) the Beta input data
         """
         self.flat = flat
-        alpha, beta, mu, var = tf.split(axis=len(flat.shape) - 1, num_or_size_splits=4, value=flat)
+        alpha, beta, mu, var = tf.split(axis=len(flat.shape)-1, num_or_size_splits=4, value=flat)
         self.alpha = alpha
         self.beta = beta
         self.mu = mu
         self.var = var
-        self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=False, allow_nan_stats=True)
+        self.dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         super(BetaProbabilityDistribution, self).__init__()
 
     def flatparam(self):
         return self.flat
 
     def mode(self):
-        # TODO: mode of beta not equal to mean, but deterministic action shall have the value of mean
         return self.dist.mode()
 
     def neglogp(self, x):
-        return tf.reduce_sum(-self.dist.log_prob(x), axis=-1)
+        log_prob = self.dist.log_prob(x)
+        log_prob = tf.where(tf.math.is_nan(log_prob), tf.zeros_like(log_prob)+0.5, log_prob)
+        log_prob = tf.where(tf.math.is_inf(log_prob), tf.zeros_like(log_prob)+0.5, log_prob)
+        return tf.reduce_sum(-log_prob, axis=-1)
 
     def kl(self, other):
         assert isinstance(other, BetaProbabilityDistribution)
         return self.dist.kl_divergence(other.dist)
 
     def entropy(self):
-        return self.dist.entropy()
+        value = self.dist.entropy()
+        value = tf.where(tf.math.is_nan(value), tf.zeros_like(value)+0.1, value)
+        return value
 
     def sample(self):
-        return self.dist.sample()
+        sampled = self.dist.sample()
+        sampled = tf.where(tf.math.is_nan(sampled), tf.zeros_like(sampled)+0.5, sampled)
+        return sampled
 
     @classmethod
     def fromflat(cls, flat):

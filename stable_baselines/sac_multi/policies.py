@@ -114,9 +114,33 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     return pi_MCP, mu_MCP, log_std_MCP
 
 
-# TODO
-def fuse_networks_GMM(mu_array, log_std_array, weight):
-    pass
+def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_action_dimension):
+    """
+    Fuse distributions of policy into a MCP fashion
+
+    :param mu_array: ([tf.Tensor]) List of means
+    :param log_std_array: ([tf.Tensor]) List of log of the standard deviations
+    :param weight: (tf.Tensor) Weight tensor of each primitives
+    :param act_index: (list) List of action indices for each primitives
+    :param total_action_dimension: (int) Dimension of a total action
+    :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
+    """
+    with tf.variable_scope("fuse"):
+        alpha_bMCP = beta_bMCP = tf.zeros((weight.shape[0].value,total_action_dimension))
+        for i in range(len(alpha_array)): #primitive-wise alpha/beta
+            # weight: [batch][total action]
+            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            # make alpha [batch][own action] -> [batch][total action]
+            shaper = np.zeros([len(act_index[i]), total_action_dimension])
+            for i, index in enumerate(act_index[i]):
+                shaper[i][index] = 1
+            alpha_shaped = tf.matmul(alpha_array[i], shaper)
+            beta_shaped = tf.matmul(beta_array[i], shaper)
+            # alpha [batch][total action] * weight [batch][total action]
+            alpha_bMCP += alpha_shaped * weight_tile
+            beta_bMCP += beta_shaped * weight_tile
+    
+    return alpha_bMCP, beta_bMCP
 
 
 class SACPolicy(BasePolicy):
@@ -338,25 +362,44 @@ class FeedForwardPolicy(SACPolicy):
 
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0.3))*0.76+0.115
-            var = tf.math.sigmoid(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=-0.3))/101
+            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
+            var = tf.math.sigmoid(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
             self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
 
+        # self.mu_ = tf.debugging.check_numerics(mu_, "mu_ Error")
+        # self.std = std = tf.debugging.check_numerics(tf.exp(log_std), "std_ Error")
         self.mu_ = mu_
         self.std = std = tf.exp(log_std)
-        tf.summary.merge_all()
 
+        # self.alpha = tf.debugging.check_numerics(-mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var), "alpha Error")
+        # self.beta = tf.debugging.check_numerics((mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var), "beta Error")
         self.alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
         self.beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
 
         dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         
         pi_ = dist.sample()
+        pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
+        pi_ = tf.where(tf.math.is_nan(pi_), tf.zeros_like(pi_)+0.5, pi_)
+        # pi_ = tf.debugging.check_numerics(pi_, "pi_ sieving USELESS")
+
         logp_pi = dist.log_prob(pi_)
+        logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        # logp_pi = tf.debugging.check_numerics(logp_pi, 'logp_pi sieving USELESS')
+
+        #self.entropy = tf.debugging.check_numerics(dist.entropy(), "entropy Error")
         self.entropy = dist.entropy()
+        self.entropy = tf.where(tf.math.is_nan(self.entropy), tf.zeros_like(self.entropy)+0.1, self.entropy)
         
         self.policy = policy = pi_
         self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+
+        tf.summary.histogram('mu', mu_)
+        tf.summary.histogram('std', std)
+        tf.summary.histogram('pi_', pi_)
+        tf.summary.histogram('logp_pi', logp_pi)
+        tf.summary.merge_all()
 
         return deterministic_policy, policy, logp_pi
 
@@ -434,6 +477,44 @@ class FeedForwardPolicy(SACPolicy):
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
+
+        return deterministic_policy, policy, logp_pi
+    
+    def make_custom_beta_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
+        """
+        Creates a custom actor object
+
+        :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
+        :param primitives: (dict) Obs/act information of primitives
+        :param total_action_dimension: (int) Dimension of a total action
+        :param reuse: (bool) whether or not to reuse parameters
+        :param scope: (str) the scope name of the actor
+        :return: (TensorFlow Tensor) the output tensor
+        """
+
+        if obs is None:
+            obs = self.processed_obs
+        with tf.variable_scope(scope, reuse=reuse):
+            alpha_MCP, beta_MCP = self.construct_beta_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
+
+        dist = tf.distributions.Beta(alpha_MCP, beta_MCP, validate_args=False, allow_nan_stats=True)
+
+        pi_MCP = dist.sample()
+        pi_MCP = tf.where(tf.math.is_nan(pi_MCP), tf.zeros_like(pi_MCP)+0.5, pi_MCP)
+        logp_pi = dist.log_prob(pi_)
+        logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+0.5, logp_pi)
+        logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+0.5, logp_pi)
+        self.entropy = dist.entropy()
+        self.std = tf.math.sqrt(alpha_MCP*beta_MCP/(((alpha_MCP+beta_MCP)**2)*(alpha_MCP+beta_MCP+1)))
+
+        self.policy = policy = pi_MCP
+        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+
+        tf.summary.histogram('mu_MCP_lin', deterministic_policy[:,0])
+        tf.summary.histogram('mu_MCP_ang', deterministic_policy[:,1])
+        tf.summary.histogram('std_MCP_lin', self.std[:,0])
+        tf.summary.histogram('std_MCP_ang', self.std[:,1])
+        tf.summary.merge_all()
 
         return deterministic_policy, policy, logp_pi
 
@@ -558,6 +639,90 @@ class FeedForwardPolicy(SACPolicy):
         pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
         
         return pi_MCP, mu_MCP, log_std_MCP
+    
+    def construct_beta_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
+        print("Received tails in actor graph: ",tails)
+        if obs is None:
+            obs = self.processed_obs
+
+        alpha_array = []
+        beta_array = []
+        act_index = []
+        weight = None
+
+        for name in tails:
+            item = primitives[name]
+            layer_name = item['layer_name'] if item['main_tail'] else name
+            if item['tails'] == None:
+                if 'weight' in name.split('/'):
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
+
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+
+                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                        tf.summary.histogram(" ", weight)
+                        self.weight[name] = weight
+                else:
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        if self.feature_extraction == "cnn":
+                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            raise NotImplementedError("Image input not supported for now")
+                        else:
+                            pi_h = tf.layers.flatten(obs)
+                        
+                        #------------- Input observation sieving layer -------------#
+                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        for i in range(len(item['obs'][1])):
+                            sieve_layer[item['obs'][1][i]][i] = 1
+                        pi_h = tf.matmul(pi_h, sieve_layer)
+                        #------------- Observation sieving layer End -------------#
+
+                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+
+                        mu = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))*0.770+0.115
+                        var = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))/100
+                        
+                        self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
+                        self.primitive_actions[name] = mu
+                        self.primitive_log_std[name] = log_std
+                        self.mu_ = mu
+                        self.std = std = tf.exp(log_std)
+                        tf.summary.histogram('mu', mu)
+                        tf.summary.histogram('std', std)
+
+                        alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+                        beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+                        alpha_array.append(alpha)
+                        beta_array.append(beta)
+                        
+                        act_index.append(item['act'][1])
+
+                        #self.entropy += gaussian_entropy(log_std)
+                        tf.summary.merge_all()
+            else:
+                with tf.variable_scope(layer_name, reuse=reuse):
+                    alpha, beta = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
+                alpha_array.append(alpha)
+                beta_array.append(beta)
+                act_index.append(item['act'][1])
+        
+        assert not isinstance(weight, type(None)), \
+            '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
+        alpha_MCP, beta_MCP = fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_action_dimension)
+        
+        return alpha_MCP, beta_MCP
    
     def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, 
                                 create_vf=False, create_qf=False, qf1=False, qf2=False):
