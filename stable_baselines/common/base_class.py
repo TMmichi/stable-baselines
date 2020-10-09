@@ -12,6 +12,7 @@ import cloudpickle
 import numpy as np
 import tensorflow as tf
 
+from stable_baselines.common.radam import RAdamOptimizer
 from stable_baselines.common.misc_util import set_global_seeds
 from stable_baselines.common.math_util import unscale_action
 from stable_baselines.common.save_util import data_to_json, json_to_data, params_to_bytes, bytes_to_params
@@ -558,7 +559,8 @@ class BaseRLModel(ABC):
                     )
                     loss = tf.reduce_mean(loss)
                 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
-                optim_op = optimizer.minimize(loss, var_list=self.params)
+                #optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
+                optim_op = optimizer.minimize(loss, var_list=self.pi_params)
 
             self.sess.run(tf.global_variables_initializer())
 

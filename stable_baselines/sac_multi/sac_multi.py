@@ -130,7 +130,10 @@ class SAC_MULTI(OffPolicyRLModel):
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
         # Rescale
-        deterministic_action = unscale_action(self.action_space, self.deterministic_action)
+        if self.box_dist == 'gaussian':
+            deterministic_action = unscale_action(self.action_space, self.deterministic_action)
+        elif self.box_dist == 'beta':
+            deterministic_action = unscale_action(self.action_space, self.deterministic_action*2-1)
         return policy.obs_ph, self.actions_ph, deterministic_action
 
     def setup_model(self):
@@ -324,6 +327,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
+                self.pi_params = tf_util.get_trainable_vars("model/pi")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
 
                 # Initialize Variables and target network
@@ -649,27 +653,37 @@ class SAC_MULTI(OffPolicyRLModel):
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
-                    action = scale_action(self.action_space, unscaled_action)
+                    if self.box_dist == 'gaussian':
+                        action = scale_action(self.action_space, unscaled_action)
+                    elif self.box_dist == 'beta':
+                        action = scale_action(self.action_space, unscaled_action*2-1)
                 else:
-                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
-                    action = action.flatten()
-                    if np.any(np.isnan(mode)):
-                        nan_num += 1
-                        print(data_past)
-                        action[np.isnan(action)] = 0
-                        if nan_num > 100:
-                            quit()
-                    data_past = [action, mode, mu, std, alpha, beta] 
+                    if self.box_dist == 'gaussian':
+                        action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                        unscaled_action = unscale_action(self.action_space, action)
+                    elif self.box_dist == 'beta':
+                        action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
+                        action = action.flatten() * 2 - 1
+                        if np.any(np.isnan(mode)):
+                            nan_num += 1
+                            print(data_past)
+                            action[np.isnan(action)] = 0
+                            if nan_num > 100:
+                                quit()
+                        data_past = [action, mode, mu, std, alpha, beta] 
+
                     # Add noise to the action (improve exploration,
                     # not needed in general)
                     if self.action_noise is not None:
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # inferred actions need to be transformed to environment action_space before stepping
-                    # unscaled_action = unscale_action(self.action_space, action)
-                    unscaled_action = action * 2 - 1
-                    if step % 100 == 0:
-                        print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
+                    unscaled_action = unscale_action(self.action_space, action)
+                    if self.box_dist == 'gaussian':
+                        if step % 200 == 0:
+                            print('action: {0: 2.3f}'.format(unscaled_action[0]))
+                    elif self.box_dist == 'beta':
+                        if step % 200 == 0:
+                            print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
 
                 assert action.shape == self.env.action_space.shape
 
