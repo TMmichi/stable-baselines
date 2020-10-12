@@ -372,7 +372,10 @@ class SAC_MULTI(OffPolicyRLModel):
                 loaded = True if 'loaded' in primitives.keys() else False
                 if loaded:
                     with tf.variable_scope("model", reuse=False):
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
+                        if self.box_dist == 'gaussian':
+                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
+                        elif self.box_dist == 'beta':
+                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_beta_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
                     test = True
 
@@ -381,7 +384,10 @@ class SAC_MULTI(OffPolicyRLModel):
                         # first return value corresponds to deterministic actions
                         # policy_out corresponds to stochastic actions, used for training
                         # logp_pi is the log probability of actions taken by the policy
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
+                        if self.box_dist == 'gaussian':
+                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
+                        elif self.box_dist == 'beta':
+                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_beta_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
                         # Monitor the entropy of the policy,
                         # this is not used for training
                         self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -683,7 +689,22 @@ class SAC_MULTI(OffPolicyRLModel):
                             print('action: {0: 2.3f}'.format(unscaled_action[0]))
                     elif self.box_dist == 'beta':
                         if step % 200 == 0:
-                            print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
+                            try:
+                                prim_actions = self.policy_tf.get_primitive_action(obs[None])
+                                weights = self.policy_tf.get_weight(obs[None])
+                                alphas, betas = self.policy_tf.get_primitive_param(obs[None])
+                            except Exception:
+                                pass
+                            if len(unscaled_action) == 1:
+                                print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
+                            else:
+                                print(prim_actions)
+                                print(alphas)
+                                print(betas)
+                                print(weights['level1_PoseControl/weight'])
+                                for i in range(len(unscaled_action)):
+                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
+                                
 
                 assert action.shape == self.env.action_space.shape
 
@@ -770,7 +791,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 if len(episode_rewards[-101:-1]) == 0:
                     mean_reward = -np.inf
                 else:
-                    mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
+                    mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 4)
 
                 num_episodes = len(episode_rewards)
 
@@ -818,7 +839,10 @@ class SAC_MULTI(OffPolicyRLModel):
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions = self.policy_tf.step(observation, deterministic=deterministic)
         actions = actions.reshape((-1,) + self.action_space.shape)  # reshape to the correct action shape
-        actions = unscale_action(self.action_space, actions) # scale the output for the prediction
+        if self.box_dist == 'gaussian':
+            actions = unscale_action(self.action_space, actions) # scale the output for the prediction
+        elif self.box_dist =='beta':
+            actions = unscale_action(self.action_space, actions*2-1) # scale the output for the prediction
 
         if not vectorized_env:
             actions = actions[0]

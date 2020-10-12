@@ -560,7 +560,7 @@ class BaseRLModel(ABC):
                     loss = tf.reduce_mean(loss)
                 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
                 #optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
-                optim_op = optimizer.minimize(loss, var_list=self.pi_params)
+                optim_op = optimizer.minimize(loss, var_list=self.params)
 
             self.sess.run(tf.global_variables_initializer())
 
@@ -586,7 +586,7 @@ class BaseRLModel(ABC):
                 # Full pass on the validation set
                 for _ in range(len(dataset.val_loader)):
                     expert_obs, expert_actions = dataset.get_next_batch('val')
-                    val_loss_, = self.sess.run([loss], {obs_ph: expert_obs,
+                    val_loss_,  = self.sess.run([loss], {obs_ph: expert_obs,
                                                         actions_ph: expert_actions})
                     val_loss += val_loss_
 

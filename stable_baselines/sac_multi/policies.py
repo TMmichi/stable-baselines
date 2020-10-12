@@ -126,19 +126,23 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
     with tf.variable_scope("fuse"):
-        alpha_bMCP = beta_bMCP = tf.zeros((weight.shape[0].value,total_action_dimension))
+        alpha_bMCP = beta_bMCP = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
+        weight_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(alpha_array)): #primitive-wise alpha/beta
             # weight: [batch][total action]
-            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value]))
             # make alpha [batch][own action] -> [batch][total action]
-            shaper = np.zeros([len(act_index[i]), total_action_dimension])
-            for i, index in enumerate(act_index[i]):
-                shaper[i][index] = 1
-            alpha_shaped = tf.matmul(alpha_array[i], shaper)
-            beta_shaped = tf.matmul(beta_array[i], shaper)
+            shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
+            for j, index in enumerate(act_index[i]):
+                shaper[j][index] = 1
             # alpha [batch][total action] * weight [batch][total action]
-            alpha_bMCP += alpha_shaped * weight_tile
-            beta_bMCP += beta_shaped * weight_tile
+            alpha_temp = alpha_array[i] * weight_tile
+            beta_temp = beta_array[i] * weight_tile
+            weight_sum += tf.matmul(weight_tile, shaper)
+            alpha_bMCP += tf.matmul(alpha_temp, shaper)
+            beta_bMCP += tf.matmul(beta_temp, shaper)
+        alpha_bMCP = tf.math.divide_no_nan(alpha_bMCP, weight_sum)
+        beta_bMCP = tf.math.divide_no_nan(beta_bMCP, weight_sum)
     
     return alpha_bMCP, beta_bMCP
 
@@ -286,6 +290,8 @@ class FeedForwardPolicy(SACPolicy):
         self.weight = {}
         self.primitive_actions = {}
         self.primitive_log_std = {}
+        self.primitive_alpha = {}
+        self.primitive_beta = {}
         self.primitive_value = {}
         self.primitive_qf1 = {}
         self.primitive_qf2 = {}
@@ -366,7 +372,7 @@ class FeedForwardPolicy(SACPolicy):
             # self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
 
             mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
-            var = tf.math.sigmoid(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
+            var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
             self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
 
         # self.mu_ = tf.debugging.check_numerics(mu_, "mu_ Error")
@@ -499,25 +505,31 @@ class FeedForwardPolicy(SACPolicy):
         if obs is None:
             obs = self.processed_obs
         with tf.variable_scope(scope, reuse=reuse):
-            alpha_MCP, beta_MCP = self.construct_beta_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
+            alpha_MCP, beta_MCP = self.construct_beta_actor_graph(obs, primitives, tails, total_action_dimension, reuse)
 
         dist = tf.distributions.Beta(alpha_MCP, beta_MCP, validate_args=False, allow_nan_stats=True)
 
         pi_MCP = dist.sample()
         pi_MCP = tf.where(tf.math.is_nan(pi_MCP), tf.zeros_like(pi_MCP)+0.5, pi_MCP)
-        logp_pi = dist.log_prob(pi_)
+        logp_pi = dist.log_prob(pi_MCP)
         logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+0.5, logp_pi)
         logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+0.5, logp_pi)
+        logp_pi = tf.reduce_sum(logp_pi, axis=1)
+        self.alpha = alpha_MCP
+        self.beta = beta_MCP
+        self.primitive_alpha['alpha_bMCP'] = alpha_MCP
+        self.primitive_beta['beta_bMCP'] = beta_MCP
         self.entropy = dist.entropy()
+        self.mu_ = alpha_MCP / (alpha_MCP + beta_MCP)
         self.std = tf.math.sqrt(alpha_MCP*beta_MCP/(((alpha_MCP+beta_MCP)**2)*(alpha_MCP+beta_MCP+1)))
 
         self.policy = policy = pi_MCP
-        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_bMCP'] = dist.mode()
 
-        tf.summary.histogram('mu_MCP_lin', deterministic_policy[:,0])
-        tf.summary.histogram('mu_MCP_ang', deterministic_policy[:,1])
-        tf.summary.histogram('std_MCP_lin', self.std[:,0])
-        tf.summary.histogram('std_MCP_ang', self.std[:,1])
+        tf.summary.histogram('mu_bMCP_lin', deterministic_policy[:,0])
+        tf.summary.histogram('mu_bMCP_ang', deterministic_policy[:,1])
+        tf.summary.histogram('std_bMCP_lin', self.std[:,0])
+        tf.summary.histogram('std_bMCP_ang', self.std[:,1])
         tf.summary.merge_all()
 
         return deterministic_policy, policy, logp_pi
@@ -644,7 +656,7 @@ class FeedForwardPolicy(SACPolicy):
         
         return pi_MCP, mu_MCP, log_std_MCP
     
-    def construct_beta_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
+    def construct_beta_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False):
         print("Received tails in actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -695,29 +707,27 @@ class FeedForwardPolicy(SACPolicy):
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
-                        mu = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))*0.770+0.115
+                        mu = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))*0.770+0.117
                         var = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))/100
                         
-                        self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
                         self.primitive_actions[name] = mu
-                        self.primitive_log_std[name] = log_std
-                        self.mu_ = mu
-                        self.std = std = tf.exp(log_std)
-                        tf.summary.histogram('mu', mu)
-                        tf.summary.histogram('std', std)
+                        self.primitive_log_std[name] = tf.log(var)/2
+                        print('mu: ',mu)
+                        # tf.summary.histogram('mu', mu)
+                        # tf.summary.histogram('std', tf.sqrt(var))
 
-                        alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
-                        beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+                        alpha = -mu*tf.math.divide_no_nan((var+mu**2-mu),var)
+                        beta = (mu-1)*tf.math.divide_no_nan((var+mu**2-mu),var)
+                        self.primitive_alpha[name] = alpha
+                        self.primitive_beta[name] = beta
                         alpha_array.append(alpha)
                         beta_array.append(beta)
                         
                         act_index.append(item['act'][1])
-
-                        #self.entropy += gaussian_entropy(log_std)
                         tf.summary.merge_all()
             else:
                 with tf.variable_scope(layer_name, reuse=reuse):
-                    alpha, beta = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
+                    alpha, beta = self.construct_beta_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse)
                 alpha_array.append(alpha)
                 beta_array.append(beta)
                 act_index.append(item['act'][1])
@@ -841,6 +851,9 @@ class FeedForwardPolicy(SACPolicy):
 
     def get_primitive_log_std(self, obs):
         return self.sess.run(self.primitive_log_std, {self.obs_ph: obs})
+
+    def get_primitive_param(self, obs):
+        return self.sess.run([self.primitive_alpha, self.primitive_beta], {self.obs_ph: obs})
 
     def proba_step(self, obs, state=None, mask=None, beta=False):
         if beta:

@@ -304,7 +304,7 @@ class BetaProbabilityDistributionType(ProbabilityDistributionType):
         # alpha = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/alpha', self.size, init_scale=init_scale, init_bias=init_bias))*5)
         # beta = tf.exp(tf.nn.softplus(linear(pi_latent_vector, 'pi/beta', self.size, init_scale=init_scale, init_bias=init_bias))*5)
         mu = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=0.3)) * 0.770 + 0.117
-        var = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense_0', self.size, init_scale=init_scale, init_bias=-0.3))/100
+        var = tf.math.sigmoid(linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=-0.3))/100
 
         alpha = -mu*tf.math.divide_no_nan((var+mu**2-mu),var)
         beta = (mu-1)*tf.math.divide_no_nan((var+mu**2-mu),var)
