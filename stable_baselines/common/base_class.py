@@ -1171,21 +1171,6 @@ class ActorCriticRLModel(BaseRLModel):
                 if isinstance(self.env.action_space, gym.spaces.Box):
                     clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
 
-        # try:
-        #     if self.act_model.squash:
-        #         if isinstance(self.env.action_space, gym.spaces.Box):
-        #             clipped_actions = unscale_action(self.env.action_space, clipped_actions)
-        #     else:
-        #         if self.act_model.box_dist=='beta':
-        #             if isinstance(self.env.action_space, gym.spaces.Box):
-        #                 clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
-        #         else:
-        #             if isinstance(self.env.action_space, gym.spaces.Box):
-        #                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-        # except Exception:
-        #     if isinstance(self.action_space, gym.spaces.Box):
-        #         clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
-
         if not vectorized_env:
             if state is not None:
                 raise ValueError("Error: The environment must be vectorized when using recurrent policies.")

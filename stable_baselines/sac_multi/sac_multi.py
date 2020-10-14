@@ -7,6 +7,7 @@ import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
+from stable_baselines.common.radam import RAdamOptimizer
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
 from stable_baselines.common.schedules import get_schedule_fn
@@ -129,6 +130,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
+        print("in pretrain placeholders")
         # Rescale
         if self.box_dist == 'gaussian':
             deterministic_action = unscale_action(self.action_space, self.deterministic_action)
@@ -263,7 +265,8 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
-                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
+                    #policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
+                    policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     policy_train_op = policy_optimizer.apply_gradients(grads)
                     #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
@@ -491,7 +494,19 @@ class SAC_MULTI(OffPolicyRLModel):
                         for var in policy_var_list:
                             tf.summary.histogram(var.name, var)
                             print("\t",var)
-                        policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
+                        policy_var_freeze = tf_util.get_trainable_vars('model/pi/freeze')
+                        print("Policy NOT optimizee: ")
+                        for var in policy_var_freeze:
+                            tf.summary.histogram(var.name, var)
+                            print("\t",var)
+
+                        grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
+                        for item in grads:
+                            print(item[0])
+                        policy_train_op = policy_optimizer.apply_gradients(grads)
+                        for index, grad in enumerate(grads): 
+                            tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                         # Value train op
                         value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -863,6 +878,11 @@ class SAC_MULTI(OffPolicyRLModel):
         observation = np.array(observation)
         observation = observation.reshape((-1,) + self.observation_space.shape)
         return self.policy_tf.get_primitive_log_std(observation)
+    
+    def get_primitive_param(self, observation):
+        observation = np.array(observation)
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        return self.policy_tf.get_primitive_param(observation)
 
     def get_parameter_list(self):
         return (self.params +

@@ -130,7 +130,11 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
         weight_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(alpha_array)): #primitive-wise alpha/beta
             # weight: [batch][total action]
-            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value]))
+            if i == 0:
+                mult = 0.1
+            else:
+                mult = 1
+            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value])) * mult
             # make alpha [batch][own action] -> [batch][total action]
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
             for j, index in enumerate(act_index[i]):
@@ -141,6 +145,7 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
             weight_sum += tf.matmul(weight_tile, shaper)
             alpha_bMCP += tf.matmul(alpha_temp, shaper)
             beta_bMCP += tf.matmul(beta_temp, shaper)
+
         alpha_bMCP = tf.math.divide_no_nan(alpha_bMCP, weight_sum)
         beta_bMCP = tf.math.divide_no_nan(beta_bMCP, weight_sum)
     
@@ -657,7 +662,7 @@ class FeedForwardPolicy(SACPolicy):
         return pi_MCP, mu_MCP, log_std_MCP
     
     def construct_beta_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False):
-        print("Received tails in actor graph: ",tails)
+        print("Received tails in beta actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
 
@@ -712,7 +717,6 @@ class FeedForwardPolicy(SACPolicy):
                         
                         self.primitive_actions[name] = mu
                         self.primitive_log_std[name] = tf.log(var)/2
-                        print('mu: ',mu)
                         # tf.summary.histogram('mu', mu)
                         # tf.summary.histogram('std', tf.sqrt(var))
 
