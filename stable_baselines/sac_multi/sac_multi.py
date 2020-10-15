@@ -265,8 +265,8 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
-                    #policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
-                    policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
+                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
+                    #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     policy_train_op = policy_optimizer.apply_gradients(grads)
                     #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
@@ -486,19 +486,20 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         # Policy train op
                         # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
-                        policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                        #policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                        policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                         # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                         # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
                         print("Policy optimizee: ")
-                        for var in policy_var_list:
-                            tf.summary.histogram(var.name, var)
-                            print("\t",var)
+                        # for var in policy_var_list:
+                        #     tf.summary.histogram(var.name, var)
+                        #     print("\t",var)
                         policy_var_freeze = tf_util.get_trainable_vars('model/pi/freeze')
                         print("Policy NOT optimizee: ")
-                        for var in policy_var_freeze:
-                            tf.summary.histogram(var.name, var)
-                            print("\t",var)
+                        # for var in policy_var_freeze:
+                        #     tf.summary.histogram(var.name, var)
+                        #     print("\t",var)
 
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                         for item in grads:
@@ -515,9 +516,9 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
                         print("Source optimizee: ")
-                        for var in source_params_trainable:
-                            tf.summary.histogram(var.name, var)
-                            print("\t",var)
+                        # for var in source_params_trainable:
+                        #     tf.summary.histogram(var.name, var)
+                        #     print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
                         print("Target optimizee: ")
                         for var in target_params_trainable:

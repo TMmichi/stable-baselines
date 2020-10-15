@@ -239,10 +239,6 @@ class BaseRLModel(ABC):
             self.ep_info_buf = deque(maxlen=100)
 
     def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, layer_structure, loaded_policy=None, load_value=True):
-        # TODO 1: Store level of the top hierarchy
-        # TODO 2: Check if there exists same name @ top level of hierarchy
-        # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
-        # TODO 3-2: else -> check whether given name is identical to the name of the weight of the submodule
         '''
         Returns info of the primitive as a dictionary
 
@@ -558,8 +554,8 @@ class BaseRLModel(ABC):
                         labels=tf.stop_gradient(one_hot_actions)
                     )
                     loss = tf.reduce_mean(loss)
-                optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
-                #optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
+                #optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
                 optim_op = optimizer.minimize(loss, var_list=self.params)
 
             self.sess.run(tf.global_variables_initializer())
