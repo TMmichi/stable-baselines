@@ -685,6 +685,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         unscaled_action = unscale_action(self.action_space, action)
                     elif self.box_dist == 'beta':
                         action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
+                        weight = self.policy_tf.get_weight(obs[None])
                         action = action.flatten() * 2 - 1
                         if np.any(np.isnan(mode)):
                             nan_num += 1
@@ -730,7 +731,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 # except Exception:
                 #     new_obs, reward, done, info = self.env.step(unscaled_action)
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action)
+                new_obs, reward, done, info = self.env.step(unscaled_action, weight)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards

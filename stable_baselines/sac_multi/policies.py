@@ -130,10 +130,10 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
         weight_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(alpha_array)): #primitive-wise alpha/beta
             # weight: [batch][total action]
-            if i == 0:
-                mult = 0.1
-            else:
-                mult = 1
+            # if i == 0:
+            #     mult = 0.1
+            # else:
+            #     mult = 1
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value])) * mult
             # make alpha [batch][own action] -> [batch][total action]
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
