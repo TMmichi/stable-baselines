@@ -67,7 +67,7 @@ class SAC_MULTI(OffPolicyRLModel):
                  gradient_steps=1, target_entropy='auto', box_dist='gaussian', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
-                 seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
+                 seed=None, n_cpu_tf_sess=None, composite_primitive_name=None, sa_coupler_index=None):
 
         super(SAC_MULTI, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs,
@@ -124,13 +124,13 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
+        self.sa_coupler_index = sa_coupler_index
 
         if _init_setup_model:
             self.setup_model()
 
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
-        print("in pretrain placeholders")
         # Rescale
         if self.box_dist == 'gaussian':
             deterministic_action = unscale_action(self.action_space, self.deterministic_action)
@@ -174,9 +174,15 @@ class SAC_MULTI(OffPolicyRLModel):
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
                     if self.box_dist == 'gaussian':
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                        actor_function = self.policy_tf.make_actor
+                        #self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph, sa_coupler_index=self.sa_coupler_index)
                     elif self.box_dist == 'beta':
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph)
+                        actor_function = self.policy_tf.make_beta_actor
+                        #self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph, sa_coupler_index=self.sa_coupler_index)
+                    if self.sa_coupler_index is None:
+                        self.deterministic_action, policy_out, logp_pi = actor_function(self.processed_obs_ph)
+                    else:
+                        self.deterministic_action, policy_out, logp_pi, sa_coupler = actor_function(self.processed_obs_ph, sa_coupler_index=self.sa_coupler_index)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -254,6 +260,15 @@ class SAC_MULTI(OffPolicyRLModel):
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
                     policy_loss = policy_kl_loss
 
+                    # NOTE: Policy SA coupler loss
+                    if self.sa_coupler_index is not None:
+                        sieve_layer = np.zeros([self.next_observations_ph.shape[1].value, len(self.sa_coupler_index)], dtype=np.float32)
+                        for i in range(len(self.sa_coupler_index)):
+                            sieve_layer[self.sa_coupler_index[i]][i] = 1
+                        #self.sieved_obs_ph = tf.matmul(self.observations_ph, sieve_layer)
+                        self.sieved_next_obs_ph = tf.matmul(self.next_observations_ph, sieve_layer)
+                        #sa_coupler_loss = 0.5 * tf.reduce_mean((self.sieved_next_obs_ph - (self.sieved_obs_ph + sa_coupler)) ** 2)
+                        sa_coupler_loss = 0.5 * tf.reduce_mean((self.sieved_next_obs_ph - sa_coupler) ** 2)
 
                     # Target for value fn regression
                     # We update the vf towards the min of two Q-functions in order to
@@ -266,15 +281,24 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
-                    #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
+                    # policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     policy_train_op = policy_optimizer.apply_gradients(grads)
-                    #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
-                    for var in tf_util.get_trainable_vars('model/pi'):
-                        tf.summary.histogram(var.name, var)
-                        print("\t",var)
+                    # policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+                    # for var in tf_util.get_trainable_vars('model/pi'):
+                    #     tf.summary.histogram(var.name, var)
+                    #     print("\t",var)
                     for index, grad in enumerate(grads): 
-                        tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        # tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        print(grad[0])
+
+                    if self.sa_coupler_index is not None:
+                        sa_coupler_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
+                        sa_grads = sa_coupler_optimizer.compute_gradients(sa_coupler_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+                        for index, grad in enumerate(sa_grads):
+                            print(grad[0])
+                        sa_coupler_op = sa_coupler_optimizer.apply_gradients(sa_grads)
+                        self.sa_coupler_ops = [sa_coupler_loss, sa_coupler, sa_coupler_op]
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -292,6 +316,12 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.assign(target, (1 - self.tau) * target + self.tau * source)
                         for target, source in zip(target_params, source_params)
                     ]
+
+                    self.target_copy_op = [
+                        tf.assign(target, source)
+                        for target, source in zip(target_params, source_params)
+                    ]
+
                     # Initializing target to match source variables
                     target_init_op = [
                         tf.assign(target, source)
@@ -461,12 +491,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         # Compute the policy loss
                         # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                         qf1_pi = tf.reshape(qf1_pi,[-1])
-                        logp_pi_mean = tf.reduce_mean(logp_pi)
-                        logp_pi_min = tf.math.reduce_min(logp_pi)
-                        logp_pi_max = tf.math.reduce_max(logp_pi)
-                        qf1_pi_mean = tf.reduce_mean(qf1_pi)
-                        qf1_pi_min = tf.math.reduce_min(qf1_pi)
-                        qf1_pi_max = tf.math.reduce_max(qf1_pi)
                         
                         policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
@@ -562,12 +586,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('1-1. logp_pi mean', logp_pi_mean)
-                        # tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
-                        # tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
-                        tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
-                        # tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
-                        # tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
                         if ent_coef_loss is not None:
                             tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                             tf.summary.scalar('ent_coef', self.ent_coef)
@@ -627,6 +645,23 @@ class SAC_MULTI(OffPolicyRLModel):
             return policy_loss, qf1_loss, qf2_loss, value_loss, entropy, ent_coef_loss, ent_coef
 
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
+    
+    def _train_sa_step(self, step, learning_rate, rollout, sa_print):
+        feed_dict = {
+            self.observations_ph: [rollout[0]],
+            self.sieved_next_obs_ph: [rollout[1][self.sa_coupler_index]],
+            self.learning_rate_ph: learning_rate
+        }
+        out = self.sess.run(self.sa_coupler_ops, feed_dict)
+        sa_coupler_loss, sa_coupler, *values = out
+        
+        if step % 100 == 0 or sa_print:
+            print("  FIRST TIMESTEP") if sa_print else None
+            print("\tsa coupler loss: ",sa_coupler_loss)
+            print("\tobs:\t\t", rollout[0][self.sa_coupler_index])
+            print("\tGT next obs:\t", rollout[1][self.sa_coupler_index])
+            #print("\tPred next obs:\t", sa_coupler[0] + rollout[0][self.sa_coupler_index])
+            print("\tPred next obs:\t", sa_coupler[0])
 
     def learn(self, total_timesteps, loaded_step_num=0 ,callback=None,
               log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, replay_wrapper=None, save_interval=0, save_path=None):
@@ -659,6 +694,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 obs_ = self._vec_normalize_env.get_original_obs().squeeze()
 
             n_updates = 0
+            sa_print = True
             infos_values = []
 
             callback.on_training_start(locals(), globals())
@@ -715,20 +751,13 @@ class SAC_MULTI(OffPolicyRLModel):
                                 print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
                             else:
                                 print(prim_actions)
-                                print(alphas)
-                                print(betas)
-                                print(weights['level1_PoseControl/weight'])
-                                for i in range(len(unscaled_action)):
-                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
+                                # print(alphas)
+                                # print(betas)
+                                # print(weights['level1_PoseControl/weight'])
+                                # for i in range(len(unscaled_action)):
+                                #     print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
                                 
-
                 assert action.shape == self.env.action_space.shape
-
-                # try:
-                #     weight = self.policy_tf.get_weight(obs[None])
-                #     new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
-                # except Exception:
-                #     new_obs, reward, done, info = self.env.step(unscaled_action)
                 
                 new_obs, reward, done, info = self.env.step(unscaled_action)
                 self.num_timesteps += 1
@@ -748,6 +777,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 # Store transition in the replay buffer.
                 self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
+                rollout = [obs_, new_obs_]
                 obs = new_obs
                 # Save the unnormalized observation
                 if self._vec_normalize_env is not None:
@@ -764,6 +794,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     ep_done = np.array([done]).reshape((1, -1))
                     tf_util.total_episode_reward_logger(self.episode_reward, ep_reward,
                                                         ep_done, writer, self.num_timesteps)
+
+                if self.sa_coupler_index is not None:
+                    self._train_sa_step(self.num_timesteps, np.copy(current_lr), rollout, sa_print)
 
                 if self.num_timesteps % self.train_freq == 0:
                     callback.on_rollout_end()
@@ -786,11 +819,17 @@ class SAC_MULTI(OffPolicyRLModel):
                         if (step + grad_step) % self.target_update_interval == 0:
                             # Update target network
                             self.sess.run(self.target_update_op)
+                        # Copy target network from source every 1000 steps (Target Network update, SAC Paper)
+                        if self.gradient_steps % 1000 == 0:
+                            self.sess.run(self.target_copy_op)
+                    
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
                     callback.on_rollout_start()
+                
+                #self.env.render()
 
                 episode_rewards[-1] += reward_
                 if done:
@@ -799,10 +838,13 @@ class SAC_MULTI(OffPolicyRLModel):
                     if not isinstance(self.env, VecEnv):
                         obs = self.env.reset()
                     episode_rewards.append(0.0)
+                    sa_print = True
 
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:
                         episode_successes.append(float(maybe_is_success))
+                else:
+                    sa_print = False
 
                 if len(episode_rewards[-101:-1]) == 0:
                     mean_reward = -np.inf

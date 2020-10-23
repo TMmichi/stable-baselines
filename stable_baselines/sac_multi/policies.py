@@ -306,7 +306,7 @@ class FeedForwardPolicy(SACPolicy):
 
         self.activ_fn = act_fun
 
-    def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
+    def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False, sa_coupler_index=None):
         if obs is None:
             obs = self.processed_obs
 
@@ -329,6 +329,10 @@ class FeedForwardPolicy(SACPolicy):
                 log_std = tf.log(std)
             self.primitive_log_std['std'] = log_std
 
+            if sa_coupler_index is not None:
+                sa_coupler = tf.layers.dense(tf.concat([pi_h, tf.stop_gradient(mu_), tf.stop_gradient(log_std)], axis=-1), \
+                                            len(sa_coupler_index), activation=None, name='SAcoupler')
+
         # Regularize policy output (not used for now)
         # reg_loss = self.reg_weight * 0.5 * tf.reduce_mean(log_std ** 2)
         # reg_loss += self.reg_weight * 0.5 * tf.reduce_mean(mu ** 2)
@@ -342,11 +346,11 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = std = tf.exp(log_std)
         # Reparameterization trick
-        #mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
-        #std = tf.Print(std,[std],"\tstd = ", summarize=-1)
-        tf.summary.histogram('mu', mu_)
-        tf.summary.histogram('std', std)
-        tf.summary.merge_all()
+        # mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
+        # std = tf.Print(std,[std],"\tstd = ", summarize=-1)
+        # tf.summary.histogram('mu', mu_)
+        # tf.summary.histogram('std', std)
+        # tf.summary.merge_all()
         
         pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
         #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
@@ -359,9 +363,12 @@ class FeedForwardPolicy(SACPolicy):
         self.policy = policy
         self.deterministic_policy = deterministic_policy
 
-        return deterministic_policy, policy, logp_pi
+        if sa_coupler_index is None:
+            return deterministic_policy, policy, logp_pi
+        else:
+            return deterministic_policy, policy, logp_pi, sa_coupler
 
-    def make_beta_actor(self, obs=None, reuse=False, scope="pi"):
+    def make_beta_actor(self, obs=None, reuse=False, scope="pi", sa_coupler_index=None):
         if obs is None:
             obs = self.processed_obs
 
@@ -373,50 +380,60 @@ class FeedForwardPolicy(SACPolicy):
 
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            # self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
-            # self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
+            # self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1.1
+            # self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1.1
 
-            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
+            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.115
             var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
             self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
+            if sa_coupler_index is not None:
+                sa_coupler = tf.layers.dense(pi_h, 256, activation=tf.nn.relu, name='SAcoupler0')
+                sa_coupler = tf.layers.dense(sa_coupler, len(sa_coupler_index)*2, activation=tf.nn.relu, name='SAcoupler1')
+                concat = tf.concat([sa_coupler, tf.stop_gradient(mu_), tf.stop_gradient(var)], axis=-1)
+                sa_coupler = tf.layers.dense(concat, 256, activation=tf.nn.relu, name='SAcoupler-concat')
+                sa_coupler = tf.layers.dense(sa_coupler, 256, activation=tf.nn.relu, name='SAcoupler2')
+                sa_coupler = tf.layers.dense(sa_coupler, len(sa_coupler_index), activation=None, name='SAcoupler')
 
-        # self.mu_ = tf.debugging.check_numerics(mu_, "mu_ Error")
-        # self.std = std = tf.debugging.check_numerics(tf.exp(log_std), "std_ Error")
         self.mu_ = mu_
         self.std = std = tf.exp(log_std)
 
-        # self.alpha = tf.debugging.check_numerics(-mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var), "alpha Error")
-        # self.beta = tf.debugging.check_numerics((mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var), "beta Error")
         self.alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
         self.beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
 
         dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         
-        pi_ = dist.sample()
-        pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
-        pi_ = tf.where(tf.math.is_nan(pi_), tf.zeros_like(pi_)+0.5, pi_)
+        pi_ = dist.sample(25)
+        pi_ = tf.where(tf.math.is_inf(pi_), dist.sample(25), pi_)
+        pi_ = tf.where(tf.math.is_inf(pi_), dist.sample(25), pi_)
+        pi_ = tf.where(tf.math.is_nan(pi_), dist.sample(25), pi_)
+        pi_ = tf.where(tf.math.is_nan(pi_), dist.sample(25), pi_)
         pi_ = tf.debugging.check_numerics(pi_, "pi_ sieving USELESS")
+        pi_ = tf.clip_by_value(pi_, 0+0.001, 1-0.001)
+        self.policy = policy = pi_[0]
 
-        logp_pi = dist.log_prob(pi_)
-        logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
-        logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        logp_pi = tf.reduce_mean(dist.log_prob(pi_), axis=0)
+        #logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        #logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
         logp_pi = tf.debugging.check_numerics(logp_pi, 'logp_pi sieving USELESS')
 
-        #self.entropy = tf.debugging.check_numerics(dist.entropy(), "entropy Error")
         self.entropy = dist.entropy()
-        self.entropy = tf.where(tf.math.is_nan(self.entropy), tf.zeros_like(self.entropy)+0.1, self.entropy)
+        #self.entropy = tf.where(tf.math.is_nan(self.entropy), tf.zeros_like(self.entropy)+1, self.entropy)
+        #self.entropy = tf.debugging.check_numerics(dist.entropy(), "entropy Error")
         
-        self.policy = policy = pi_
+        mode = dist.mode()
         #mode = tf.where(tf.math.is_nan(dist.mode()), tf.zeros_like(dist.mode())+0.5, dist.mode())
-        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = mode
 
         tf.summary.histogram('mu', mu_)
         tf.summary.histogram('std', std)
-        tf.summary.histogram('pi_', pi_)
+        tf.summary.histogram('pi_', pi_[0])
         tf.summary.histogram('logp_pi', logp_pi)
         tf.summary.merge_all()
 
-        return deterministic_policy, policy, logp_pi
+        if sa_coupler_index is None:
+            return deterministic_policy, policy, logp_pi
+        else:
+            return deterministic_policy, policy, logp_pi, sa_coupler
 
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                      create_vf=True, create_qf=True):
@@ -714,6 +731,10 @@ class FeedForwardPolicy(SACPolicy):
 
                         mu = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))*0.770+0.117
                         var = tf.math.sigmoid(tf.layers.dense(pi_h, len(item['act'][1]), activation=None))/100
+
+                        if item['sa_coupler_index'] is not None:
+                            sa_coupler = tf.layers.dense(tf.concat([pi_h, tf.stop_gradient(mu_), tf.stop_gradient(log_std)], axis=-1), \
+                                                        len(item['sa_coupler_index']), activation=None, name='SAcoupler')
                         
                         self.primitive_actions[name] = mu
                         self.primitive_log_std[name] = tf.log(var)/2
