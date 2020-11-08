@@ -6,9 +6,10 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 
-from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
+from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter, zipsame
 from stable_baselines.common.radam import RAdamOptimizer
 from stable_baselines.common.vec_env import VecEnv
+from stable_baselines.common.cg import conjugate_gradient
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
 from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer
@@ -254,27 +255,58 @@ class SAC_MULTI(OffPolicyRLModel):
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
                     policy_loss = policy_kl_loss
 
-
                     # Target for value fn regression
                     # We update the vf towards the min of two Q-functions in order to
                     # reduce overestimation bias from function approximation error.
                     v_backup = tf.stop_gradient(min_qf_pi - self.ent_coef * logp_pi)
                     value_loss = 0.5 * tf.reduce_mean((value_fn - v_backup) ** 2)
-
                     values_losses = qf1_loss + qf2_loss + value_loss
 
                     # Policy train op
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
                     #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
-                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
-                    policy_train_op = policy_optimizer.apply_gradients(grads)
+                    policy_var_list = tf_util.get_trainable_vars('model/pi')
+                    logp_pi_grad = tf.gradients(tf.reduce_mean(logp_pi), policy_var_list)
+                    print('logp_pi_grad: ')
+                    for item in logp_pi_grad:
+                        print('\t',item)
+                    flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
+                    shapes = [var.get_shape().as_list() for var in policy_var_list]
+                    print('shapes: ',shapes)
+                    start = 0
+                    tangents = []
+                    for shape in shapes:
+                        var_size = tf_util.intprod(shape)
+                        tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
+                        start += var_size
+                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
+                    self.grad_logger_op = {}
+                    for index, grad in enumerate(grads):
+                        #print(grad)
+                        self.grad_logger_op[grad[1].name] = grad[1]
+                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                    gvp = tf.add_n([tf.reduce_sum(grad * tangent) for (grad, tangent) in zipsame(logp_pi_grad, tangents)])
+                    print('gvp: ',gvp)
+                    #fvp = tf_util.flatgrad(gvp, policy_var_list)
+                    fvp = tf.gradients(gvp, policy_var_list)
+                    print(fvp)
+                    quit()
+                    compute_fvp = tf_util.function([flat_tangent], fvp)
+                    def fisher_vector_product(vec):
+                        return compute_fvp(vec, sess=self.sess)
+                    step_dir = conjugate_gradient(fisher_vector_product, grads)
+                    assert np.isfinite(step_dir).all()
+                    #policy_train_op = policy_optimizer.apply_gradients(grads)
+                    policy_train_op = policy_optimizer.apply_gradients(step_dir)
                     #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
+
                     for var in tf_util.get_trainable_vars('model/pi'):
-                        tf.summary.histogram(var.name, var)
+                        #tf.summary.histogram(var.name, var)
                         print("\t",var)
                     for index, grad in enumerate(grads): 
-                        tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        pass
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -501,12 +533,30 @@ class SAC_MULTI(OffPolicyRLModel):
                         #     tf.summary.histogram(var.name, var)
                         #     print("\t",var)
 
+                        flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
+                        shapes = [var.get_shape().as_list() for var in policy_var_list]
+                        start = 0
+                        tangents = []
+                        for shape in shapes:
+                            var_size = tf_util.intprod(shape)
+                            tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
+                            start += var_size
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
-                        for item in grads:
-                            print(item[0])
-                        policy_train_op = policy_optimizer.apply_gradients(grads)
-                        for index, grad in enumerate(grads): 
-                            tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        self.grad_logger_op = {}
+                        for index, grad in enumerate(grads):
+                            print(grad)
+                            self.grad_logger_op[grad[1].name] = grad[1]
+                            #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        gvp = tf.add_n([tf.reduce_sum(grad * tangent)
+                                    for (grad, tangent) in zipsame(grads, tangents)])
+                        fvp = tf_util.flatgrad(gvp, policy_var_list)
+                        compute_fvp = tf_util.function([flat_tangent], fvp)
+                        def fisher_vector_product(vec):
+                            return compute_fvp(vec, sess=self.sess)
+                        step_dir = conjugate_gradient(fisher_vector_product, grads)
+                        assert np.isfinite(step_dir).all()
+                        #policy_train_op = policy_optimizer.apply_gradients(grads)
+                        policy_train_op = policy_optimizer.apply_gradients(step_dir)
                         #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
 
                         # Value train op
@@ -590,10 +640,18 @@ class SAC_MULTI(OffPolicyRLModel):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-
+        if np.any(np.isnan(batch_obs)):
+            print("NAN in batch_obs:")
+            print(batch_obs)
         if np.any(np.isnan(batch_actions)):
             print("NAN in batch_actions:")
             print(batch_actions)
+        if np.any(np.isnan(batch_rewards)):
+            print("NAN in batch_rewards:")
+            print(batch_rewards)
+        if np.any(np.isnan(batch_next_obs)):
+            print("NAN in batch_next_obs:")
+            print(batch_next_obs)
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -611,6 +669,22 @@ class SAC_MULTI(OffPolicyRLModel):
         # Do one gradient step
         # and optionally compute log for tensorboard
         if writer is not None:
+            logger = self.sess.run(self.grad_logger_op, feed_dict)
+            self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+            self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+
+            self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+            for name,item in logger.items():
+                self.file_logger.writelines(str(name)+'\n')
+                self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines(str(name)+'\n')
+                self.file_mean_logger.writelines(str(np.mean(item)))
+                self.file_mean_logger.writelines('\n')
+                #print(name,item.shape[:])
+            self.file_logger.writelines('\n')
+            self.file_mean_logger.writelines('\n')
+            #print(" ")
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)
@@ -642,6 +716,9 @@ class SAC_MULTI(OffPolicyRLModel):
                 as writer:
 
             self._setup_learn()
+            self.file_logger = open(save_path+"/gradient_logger.txt",'w')
+            self.file_mean_logger = open(save_path+"/mean_gradient_logger.txt",'w')
+            np.set_printoptions(threshold=sys.maxsize)
 
             # Transform to callable if needed
             self.learning_rate = get_schedule_fn(self.learning_rate)
@@ -679,13 +756,14 @@ class SAC_MULTI(OffPolicyRLModel):
                         action = scale_action(self.action_space, unscaled_action)
                     elif self.box_dist == 'beta':
                         action = scale_action(self.action_space, unscaled_action*2-1)
+                    weight = [0,0,0,0]
                 else:
                     if self.box_dist == 'gaussian':
                         action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                         unscaled_action = unscale_action(self.action_space, action)
                     elif self.box_dist == 'beta':
                         action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
-                        weight = self.policy_tf.get_weight(obs[None])
+                        weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                         action = action.flatten() * 2 - 1
                         if np.any(np.isnan(mode)):
                             nan_num += 1
@@ -748,6 +826,24 @@ class SAC_MULTI(OffPolicyRLModel):
                     obs_, new_obs_, reward_ = obs, new_obs, reward
 
                 # Store transition in the replay buffer.
+                if np.any(np.isnan(obs_)):
+                    print("NAN in obs_:")
+                    print(obs_)
+                    print("\tData: ")
+                    print(obs_, action, reward_, new_obs_)
+                
+                if np.any(np.isnan(action)):
+                    print("NAN in action:")
+                    print(action)
+                    print("\tData: ")
+                    print(obs_, action, reward_, new_obs_)
+                
+                if np.any(np.isnan(reward_)):
+                    print("NAN in reward_:")
+                    print(reward_)
+                    print("\tData: ")
+                    print(obs_, action, reward_, new_obs_)
+
                 self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 obs = new_obs
                 # Save the unnormalized observation
@@ -838,6 +934,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Reset infos:
                     infos_values = []
             callback.on_training_end()
+            self.file_logger.close()
+            self.file_mean_logger.close()
             return self
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
