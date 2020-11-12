@@ -286,6 +286,7 @@ class FeedForwardPolicy(SACPolicy):
                                                 reuse=reuse, scale=(feature_extraction == "cnn"), obs_phs=obs_phs)
 
         self._kwargs_check(feature_extraction, kwargs)
+        self.dist = None
         self.layer_norm = layer_norm
         self.feature_extraction = feature_extraction
         self.cnn_kwargs = kwargs
@@ -374,24 +375,24 @@ class FeedForwardPolicy(SACPolicy):
 
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            # self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
-            # self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
+            self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
+            self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
 
-            mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
-            var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
-            self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
+            # mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
+            # var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
+            # self.primitive_log_std['log_std'] = log_std = tf.log(var)/2
 
         # self.mu_ = tf.debugging.check_numerics(mu_, "mu_ Error")
         # self.std = std = tf.debugging.check_numerics(tf.exp(log_std), "std_ Error")
-        self.mu_ = mu_
-        self.std = std = tf.exp(log_std)
+        # self.mu_ = mu_
+        # self.std = std = tf.exp(log_std)
 
         # self.alpha = tf.debugging.check_numerics(-mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var), "alpha Error")
         # self.beta = tf.debugging.check_numerics((mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var), "beta Error")
-        self.alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
-        self.beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+        # self.alpha = -mu_*tf.math.divide_no_nan((var+mu_**2-mu_),var)
+        # self.beta = (mu_-1)*tf.math.divide_no_nan((var+mu_**2-mu_),var)
 
-        dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
+        self.dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         
         pi_ = dist.sample()
         pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
@@ -411,8 +412,8 @@ class FeedForwardPolicy(SACPolicy):
         #mode = tf.where(tf.math.is_nan(dist.mode()), tf.zeros_like(dist.mode())+0.5, dist.mode())
         self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
 
-        tf.summary.histogram('mu', mu_)
-        tf.summary.histogram('std', std)
+        #tf.summary.histogram('mu', mu_)
+        #tf.summary.histogram('std', std)
         tf.summary.histogram('pi_', pi_)
         tf.summary.histogram('logp_pi', logp_pi)
         tf.summary.merge_all()

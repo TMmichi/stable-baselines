@@ -146,13 +146,16 @@ class SAC_MULTI(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
-                print("sess in sac_multi: ",self.sess)
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                  **self.policy_kwargs)
+                    with tf.variable_scope("old_policy", reuse=False):
+                        old_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
+                                                    **self.policy_kwargs)
+
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                      **self.policy_kwargs)
 
@@ -267,46 +270,39 @@ class SAC_MULTI(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
                     #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                     policy_var_list = tf_util.get_trainable_vars('model/pi')
-                    logp_pi_grad = tf.gradients(tf.reduce_mean(logp_pi), policy_var_list)
-                    print('logp_pi_grad: ')
-                    for item in logp_pi_grad:
-                        print('\t',item)
-                    flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
-                    shapes = [var.get_shape().as_list() for var in policy_var_list]
-                    print('shapes: ',shapes)
-                    start = 0
-                    tangents = []
-                    for shape in shapes:
-                        var_size = tf_util.intprod(shape)
-                        tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
-                        start += var_size
-                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
-                    self.grad_logger_op = {}
-                    for index, grad in enumerate(grads):
-                        #print(grad)
-                        self.grad_logger_op[grad[1].name] = grad[1]
-                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
-                    gvp = tf.add_n([tf.reduce_sum(grad * tangent) for (grad, tangent) in zipsame(logp_pi_grad, tangents)])
-                    print('gvp: ',gvp)
-                    #fvp = tf_util.flatgrad(gvp, policy_var_list)
-                    fvp = tf.gradients(gvp, policy_var_list)
-                    print(fvp)
-                    quit()
-                    compute_fvp = tf_util.function([flat_tangent], fvp)
-                    def fisher_vector_product(vec):
-                        return compute_fvp(vec, sess=self.sess)
-                    step_dir = conjugate_gradient(fisher_vector_product, grads)
-                    assert np.isfinite(step_dir).all()
-                    #policy_train_op = policy_optimizer.apply_gradients(grads)
-                    policy_train_op = policy_optimizer.apply_gradients(step_dir)
-                    #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
 
-                    for var in tf_util.get_trainable_vars('model/pi'):
-                        #tf.summary.histogram(var.name, var)
-                        print("\t",var)
-                    for index, grad in enumerate(grads): 
-                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
-                        pass
+                    # logp_pi_grad = tf_util.flatgrad(tf.reduce_mean(logp_pi), policy_var_list)
+                    # print('logp_pi_grad: ', logp_pi_grad)
+
+                    # fim = tf.linalg.matmul(tf.reshape(logp_pi_grad,[logp_pi_grad.shape[0],1]), tf.transpose(tf.reshape(logp_pi_grad,[logp_pi_grad.shape[0],1])))
+                    # print('fim shape: ', fim.shape[:])
+
+                    # flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
+                    # fvp = tf.linalg.matvec(fim, flat_tangent)
+                    # shapes = [var.get_shape().as_list() for var in policy_var_list]
+                    # print('shapes: ',shapes)
+                    # start = 0
+                    # fvps = []
+                    # for shape in shapes:
+                    #     var_size = tf_util.intprod(shape)
+                    #     fvps.append(tf.reshape(fvp[start: start + var_size], shape))
+                    #     start += var_size
+                    # print("fvps: ", fvps)
+
+                    self.grads_op = grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
+
+                    # self.compute_fvp = tf_util.function([flat_tangent, self.observations_ph, self.actions_ph, self.next_observations_ph, self.rewards_ph], fvps)
+                    # step_dirs = tf.placeholder(dtype=tf.float32, shape=[None])
+                    # step_dir_array = []
+                    # start = 0
+                    # for shape, grad in zip(shapes, grads):
+                    #     var_size = tf_util.intprod(shape)
+                    #     step_dir_array.append((tf.reshape(step_dirs[start: start + var_size], shape), grad[1]))
+                    #     start += var_size
+
+                    # self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(step_dir_array)
+                    policy_train_op = policy_optimizer.apply_gradients(grads)
+                    # policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -314,10 +310,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                     target_params = tf_util.get_trainable_vars("target/values_fn/vf")
-
-                    # for var in target_params:
-                    #     tf.summary.histogram(var.name, var)
-                    #     print("\t",var)
 
                     # Polyak averaging for target variables
                     self.target_update_op = [
@@ -535,12 +527,15 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
                         shapes = [var.get_shape().as_list() for var in policy_var_list]
+                        print("shapes: ", shapes)
                         start = 0
                         tangents = []
                         for shape in shapes:
                             var_size = tf_util.intprod(shape)
+                            print('var_size: ', var_size)
                             tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
                             start += var_size
+                        print("tangets: ", tangents)
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                         self.grad_logger_op = {}
                         for index, grad in enumerate(grads):
@@ -549,6 +544,8 @@ class SAC_MULTI(OffPolicyRLModel):
                             #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
                         gvp = tf.add_n([tf.reduce_sum(grad * tangent)
                                     for (grad, tangent) in zipsame(grads, tangents)])
+                        print('gvp: ', gvp)
+                        quit()
                         fvp = tf_util.flatgrad(gvp, policy_var_list)
                         compute_fvp = tf_util.function([flat_tangent], fvp)
                         def fisher_vector_product(vec):
@@ -640,18 +637,6 @@ class SAC_MULTI(OffPolicyRLModel):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-        if np.any(np.isnan(batch_obs)):
-            print("NAN in batch_obs:")
-            print(batch_obs)
-        if np.any(np.isnan(batch_actions)):
-            print("NAN in batch_actions:")
-            print(batch_actions)
-        if np.any(np.isnan(batch_rewards)):
-            print("NAN in batch_rewards:")
-            print(batch_rewards)
-        if np.any(np.isnan(batch_next_obs)):
-            print("NAN in batch_next_obs:")
-            print(batch_next_obs)
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -669,22 +654,29 @@ class SAC_MULTI(OffPolicyRLModel):
         # Do one gradient step
         # and optionally compute log for tensorboard
         if writer is not None:
-            logger = self.sess.run(self.grad_logger_op, feed_dict)
-            self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
-
-            self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            for name,item in logger.items():
-                self.file_logger.writelines(str(name)+'\n')
-                self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
-                self.file_logger.writelines('\n')
-                self.file_mean_logger.writelines(str(name)+'\n')
-                self.file_mean_logger.writelines(str(np.mean(item)))
-                self.file_mean_logger.writelines('\n')
-                #print(name,item.shape[:])
-            self.file_logger.writelines('\n')
-            self.file_mean_logger.writelines('\n')
-            #print(" ")
+            # logger = self.sess.run(self.grad_logger_op, feed_dict)
+            # self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+            # self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+            # self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+            # for name,item in logger.items():
+            #     self.file_logger.writelines(str(name)+'\n')
+            #     self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+            #     self.file_logger.writelines('\n')
+            #     self.file_mean_logger.writelines(str(name)+'\n')
+            #     self.file_mean_logger.writelines(str(np.mean(item)))
+            #     self.file_mean_logger.writelines('\n')
+            # self.file_logger.writelines('\n')
+            # self.file_mean_logger.writelines('\n')
+            # def fisher_vector_product(vec):
+            #     return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
+            # grads = np.array(self.sess.run(self.grads_op, feed_dict))[:,0]
+            # grads = np.concatenate([np.reshape(grad, np.prod(grad.shape)) for grad in grads],axis=0)
+            # print(grads.shape)
+            # step_dir = conjugate_gradient(fisher_vector_product, grads)
+            # assert np.isfinite(step_dir).all()
+            # print(grads - step_dir)
+            # quit()
+            #self.sess.run([self.policy_train_op], step_dir)
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)
@@ -763,7 +755,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         unscaled_action = unscale_action(self.action_space, action)
                     elif self.box_dist == 'beta':
                         action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
-                        weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
+                        #weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                         action = action.flatten() * 2 - 1
                         if np.any(np.isnan(mode)):
                             nan_num += 1
@@ -786,7 +778,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         if step % 200 == 0:
                             try:
                                 prim_actions = self.policy_tf.get_primitive_action(obs[None])
-                                weights = self.policy_tf.get_weight(obs[None])
+                                #weights = self.policy_tf.get_weight(obs[None])
                                 alphas, betas = self.policy_tf.get_primitive_param(obs[None])
                             except Exception:
                                 pass
@@ -796,7 +788,7 @@ class SAC_MULTI(OffPolicyRLModel):
                                 print(prim_actions)
                                 print(alphas)
                                 print(betas)
-                                print(weights['level1_PoseControl/weight'])
+                                #print(weights['level1_PoseControl/weight'])
                                 for i in range(len(unscaled_action)):
                                     print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
                                 
