@@ -312,7 +312,7 @@ class FeedForwardPolicy(SACPolicy):
         if obs is None:
             obs = self.processed_obs
 
-        non_log = True
+        non_log = False
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -375,8 +375,8 @@ class FeedForwardPolicy(SACPolicy):
 
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
-            self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1
+            self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1 + EPS
+            self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1 + EPS
 
             # mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
             # var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
@@ -394,23 +394,23 @@ class FeedForwardPolicy(SACPolicy):
 
         self.dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         
-        pi_ = dist.sample()
+        pi_ = self.dist.sample()
         pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
         pi_ = tf.where(tf.math.is_nan(pi_), tf.zeros_like(pi_)+0.5, pi_)
         pi_ = tf.debugging.check_numerics(pi_, "pi_ sieving USELESS")
 
-        logp_pi = dist.log_prob(pi_)
+        logp_pi = self.dist.log_prob(pi_)
         logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
         logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
         logp_pi = tf.debugging.check_numerics(logp_pi, 'logp_pi sieving USELESS')
 
         #self.entropy = tf.debugging.check_numerics(dist.entropy(), "entropy Error")
-        self.entropy = dist.entropy()
+        self.entropy = self.dist.entropy()
         self.entropy = tf.where(tf.math.is_nan(self.entropy), tf.zeros_like(self.entropy)+0.1, self.entropy)
         
         self.policy = policy = pi_
         #mode = tf.where(tf.math.is_nan(dist.mode()), tf.zeros_like(dist.mode())+0.5, dist.mode())
-        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = dist.mode()
+        self.deterministic_policy = deterministic_policy = self.act_mu = self.primitive_actions['mu_'] = self.dist.mode()
 
         #tf.summary.histogram('mu', mu_)
         #tf.summary.histogram('std', std)
@@ -863,9 +863,12 @@ class FeedForwardPolicy(SACPolicy):
 
     def proba_step(self, obs, state=None, mask=None, beta=False):
         if beta:
-            return self.sess.run([self.policy, self.act_mu, self.mu_, self.std, self.alpha, self.beta], {self.obs_ph: obs})
+            return self.sess.run([self.policy, self.act_mu, self.alpha, self.beta], {self.obs_ph: obs})
         else:
             return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})
+    
+    def kl(self, other):
+        return self.dist.kl_divergence(other.dist)
 
 
 class CnnPolicy(FeedForwardPolicy):
