@@ -113,7 +113,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     
     return pi_MCP, mu_MCP, log_std_MCP
 
-
 def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_action_dimension):
     """
     Fuse distributions of policy into a MCP fashion
@@ -152,7 +151,7 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
     
     return alpha_bMCP, beta_bMCP
 
-
+  
 class SACPolicy(BasePolicy):
     """
     Policy object that implements a SAC-like actor critic
