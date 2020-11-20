@@ -175,8 +175,8 @@ class BasePolicy(ABC):
         # are not passed explicitly (using **kwargs to forward the arguments)
         # that's why there should be not kwargs left when using the mlp_extractor
         # (in that case the keywords arguments are passed explicitly)
-        if feature_extraction == 'mlp' and len(kwargs) > 0:
-            raise ValueError("Unknown keywords for policy: {}".format(kwargs))
+        # if feature_extraction == 'mlp' and len(kwargs) > 0:
+        #     raise ValueError("Unknown keywords for policy: {}".format(kwargs))
 
     @abstractmethod
     def step(self, obs, state=None, mask=None):

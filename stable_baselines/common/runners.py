@@ -206,4 +206,3 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
             if not isinstance(env, VecEnv):
                 observation = env.reset()
         step += 1
-        print("Total Reward for Episode: {0}".format(current_ep_len + 1))
