@@ -9,7 +9,7 @@ from gym.spaces import Discrete
 from stable_baselines.common.tf_util import batch_to_seq, seq_to_batch
 from stable_baselines.common.tf_layers import conv, linear, conv_to_fc, lstm
 from stable_baselines.common.distributions import make_proba_dist_type, CategoricalProbabilityDistribution, \
-    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution
+    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution, BetaProbabilityDistribution
 from stable_baselines.common.input import observation_input
 
 
@@ -80,11 +80,11 @@ def mlp_extractor(flat_observations, net_arch, act_fun):
     for idx, (pi_layer_size, vf_layer_size) in enumerate(zip_longest(policy_only_layers, value_only_layers)):
         if pi_layer_size is not None:
             assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
-            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)))
+            latent_policy = act_fun(linear(latent_policy, "pi/fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)))
 
         if vf_layer_size is not None:
             assert isinstance(vf_layer_size, int), "Error: net_arch[-1]['vf'] must only contain integers."
-            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)))
+            latent_value = act_fun(linear(latent_value, "values_fn/vf/fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)))
 
     return latent_policy, latent_value
 
@@ -217,16 +217,18 @@ class ActorCriticPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False):
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, box_dist='gaussian', squash=False):
         super(ActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=scale)
-        self._pdtype = make_proba_dist_type(ac_space)
+        self.box_dist = box_dist
+        self.squash = squash
+        self._pdtype = make_proba_dist_type(ac_space, box_dist, squash)
         self._policy = None
         self._proba_distribution = None
         self._value_fn = None
         self._action = None
         self._deterministic_action = None
-
+    
     def _setup_init(self):
         """Sets up the distributions, actions, and value."""
         with tf.variable_scope("output", reuse=True):
@@ -243,6 +245,8 @@ class ActorCriticPolicy(BasePolicy):
             elif isinstance(self.proba_distribution, MultiCategoricalProbabilityDistribution):
                 self._policy_proba = [tf.nn.softmax(categorical.flatparam())
                                      for categorical in self.proba_distribution.categoricals]
+            elif isinstance(self.proba_distribution, BetaProbabilityDistribution):
+                self._policy_proba = [self.proba_distribution.alpha, self.proba_distribution.beta, self.proba_distribution.mu, self.proba_distribution.var]
             else:
                 self._policy_proba = []  # it will return nothing, as it is not implemented
             self._value_flat = self.value_fn[:, 0]
@@ -538,9 +542,9 @@ class FeedForwardPolicy(ActorCriticPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
                  act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
-                                                scale=(feature_extraction == "cnn"))
+                                                scale=(feature_extraction == "cnn"), **kwargs)
 
-        self._kwargs_check(feature_extraction, kwargs)
+        #self._kwargs_check(feature_extraction, kwargs)
 
         if layers is not None:
             warnings.warn("Usage of the `layers` parameter is deprecated! Use net_arch instead "
@@ -560,10 +564,14 @@ class FeedForwardPolicy(ActorCriticPolicy):
             else:
                 pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
 
-            self._value_fn = linear(vf_latent, 'vf', 1)
+            self._value_fn = linear(vf_latent, 'values_fn/vf/vf', 1)
 
-            self._proba_distribution, self._policy, self.q_value = \
-                self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01)
+            if self.box_dist == 'gaussian':
+                self._proba_distribution, self._policy, self.q_value, self.logstd = \
+                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01, std_from_obs=True)
+            elif self.box_dist == 'beta':
+                self._proba_distribution, self._policy, self.q_value = \
+                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.1, init_bias=0.3)
 
         self._setup_init()
 
@@ -575,6 +583,11 @@ class FeedForwardPolicy(ActorCriticPolicy):
             action, value, neglogp = self.sess.run([self.action, self.value_flat, self.neglogp],
                                                    {self.obs_ph: obs})
         return action, value, self.initial_state, neglogp
+    
+    def get_logstd(self, obs):
+        obs = np.array(obs)
+        obs = obs.reshape((-1,) + obs.shape)
+        return self.sess.run([self.logstd], {self.obs_ph: obs})
 
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run(self.policy_proba, {self.obs_ph: obs})

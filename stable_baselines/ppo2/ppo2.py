@@ -10,7 +10,7 @@ from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import ActorCriticPolicy, RecurrentActorCriticPolicy
 from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.tf_util import total_episode_reward_logger
-from stable_baselines.common.math_util import safe_mean
+from stable_baselines.common.math_util import safe_mean, unscale_action
 
 class PPO2(ActorCriticRLModel):
     """
@@ -128,6 +128,7 @@ class PPO2(ActorCriticRLModel):
 
                 act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
                                         n_batch_step, reuse=False, **self.policy_kwargs)
+
                 with tf.variable_scope("train_model", reuse=True,
                                        custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
@@ -235,6 +236,7 @@ class PPO2(ActorCriticRLModel):
                 self.act_model = act_model
                 self.step = act_model.step
                 self.proba_step = act_model.proba_step
+                self.logstd = act_model.get_logstd
                 self.value = act_model.value
                 self.initial_state = act_model.initial_state
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
@@ -299,8 +301,8 @@ class PPO2(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="PPO2",
-              reset_num_timesteps=True):
+    def learn(self, total_timesteps, loaded_step_num=0, callback=None, log_interval=1, tb_log_name="PPO2",
+              reset_num_timesteps=True, save_interval=0, save_path=None):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
         self.cliprange = get_schedule_fn(self.cliprange)
@@ -387,6 +389,11 @@ class PPO2(ActorCriticRLModel):
                                                 true_reward.reshape((self.n_envs, self.n_steps)),
                                                 masks.reshape((self.n_envs, self.n_steps)),
                                                 writer, self.num_timesteps)
+                print(update, n_updates)
+                if save_interval and save_path != None:
+                    if (update+1) % int(save_interval/self.n_batch) == 0 and update:
+                        print("saved")
+                        self.save(save_path+"/policy_"+str(update*self.n_batch+loaded_step_num+1))
 
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, returns)
@@ -468,17 +475,38 @@ class Runner(AbstractEnvRunner):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
         mb_states = self.states
         ep_infos = []
-        for _ in range(self.n_steps):
+        for iteration in range(self.n_steps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
+
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
-            if isinstance(self.env.action_space, gym.spaces.Box):
-                clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            if self.model.act_model.squash:
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = unscale_action(self.env.action_space, clipped_actions)
+            else:
+                if self.model.act_model.box_dist=='beta':
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        if np.any(np.logical_or(clipped_actions > 1, clipped_actions<0)):
+                            print("WARNING: clipped action have an invalid value of",clipped_actions)
+                        clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
+                else:
+                    if isinstance(self.env.action_space, gym.spaces.Box):
+                        clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            
+            if iteration == self.n_steps-1:
+                alpha, beta, mu, var = self.model.act_model.proba_step(self.obs)
+                print('steps: ', self.n_steps)
+                print('\taction: {0}\t'.format(clipped_actions.reshape((-1))))
+                print("\talphas: ", alpha.reshape((-1)))
+                print('\tbetas: ', beta.reshape((-1)))
+                print('\tmus: ', mu.reshape((-1)))
+                print('\tvars: ', var.reshape((-1)))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

@@ -122,6 +122,7 @@ def get_schedule_fn(value_schedule):
         # Cast to float to avoid errors
         value_schedule = constfn(float(value_schedule))
     else:
+        print(value_schedule)
         assert callable(value_schedule)
     return value_schedule
 

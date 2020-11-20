@@ -12,7 +12,9 @@ import cloudpickle
 import numpy as np
 import tensorflow as tf
 
+from stable_baselines.common.radam import RAdamOptimizer
 from stable_baselines.common.misc_util import set_global_seeds
+from stable_baselines.common.math_util import unscale_action
 from stable_baselines.common.save_util import data_to_json, json_to_data, params_to_bytes, bytes_to_params
 from stable_baselines.common.policies import get_policy_from_name, ActorCriticPolicy
 from stable_baselines.common.runners import AbstractEnvRunner
@@ -237,12 +239,8 @@ class BaseRLModel(ABC):
             self.ep_info_buf = deque(maxlen=100)
 
     def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, layer_structure, loaded_policy=None, load_value=True):
-        # TODO 1: Store level of the top hierarchy
-        # TODO 2: Check if there exists same name @ top level of hierarchy
-        # TODO 3-1: If level0 primitive or newly appointed primitive/weight -> name is mandatory
-        # TODO 3-2: else -> check wheter given name is identical to the name of the weight of the submodule
         '''
-        Returns info of the primtive as a dictionary
+        Returns info of the primitive as a dictionary
 
         :param name: (str) name of the primitive
         :param freeze: (bool) primitive to be frozen at training time
@@ -426,7 +424,7 @@ class BaseRLModel(ABC):
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
             if load_value:
-                if name.find('target/values_fn/vf/fc') > -1:
+                if name.find('model/values_fn/vf/fc') > -1:
                     if name.find('bias') > -1:
                         value_layer_structure.append(value.shape[0])
         
@@ -556,7 +554,8 @@ class BaseRLModel(ABC):
                         labels=tf.stop_gradient(one_hot_actions)
                     )
                     loss = tf.reduce_mean(loss)
-                optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                #optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
                 optim_op = optimizer.minimize(loss, var_list=self.params)
 
             self.sess.run(tf.global_variables_initializer())
@@ -583,7 +582,7 @@ class BaseRLModel(ABC):
                 # Full pass on the validation set
                 for _ in range(len(dataset.val_loader)):
                     expert_obs, expert_actions = dataset.get_next_batch('val')
-                    val_loss_, = self.sess.run([loss], {obs_ph: expert_obs,
+                    val_loss_,  = self.sess.run([loss], {obs_ph: expert_obs,
                                                         actions_ph: expert_actions})
                     val_loss += val_loss_
 
@@ -718,7 +717,7 @@ class BaseRLModel(ABC):
                 # Keep track which variables are updated
                 not_updated_variables.remove(param_name)
                 print("Loaded param: ",param_name)
-            except Exception:
+            except Exception as e:
                 print("Param not in graph: ",param_name)
 
         for param_name in not_updated_variables:
@@ -1152,11 +1151,21 @@ class ActorCriticRLModel(BaseRLModel):
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions, _, states, _ = self.step(observation, state, mask, deterministic=deterministic)
-
+        
         clipped_actions = actions
         # Clip the actions to avoid out of bound error
-        if isinstance(self.action_space, gym.spaces.Box):
-            clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+        if self.act_model.squash:
+            if isinstance(self.env.action_space, gym.spaces.Box):
+                clipped_actions = unscale_action(self.env.action_space, clipped_actions)
+        else:
+            if self.act_model.box_dist=='beta':
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    if np.any(np.logical_or(clipped_actions > 1, clipped_actions<0)):
+                        print("WARNING: clipped action have an invalid value of",clipped_actions)
+                    clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
+            else:
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
 
         if not vectorized_env:
             if state is not None:
@@ -1164,6 +1173,7 @@ class ActorCriticRLModel(BaseRLModel):
             clipped_actions = clipped_actions[0]
 
         return clipped_actions, states
+
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         if state is None:
@@ -1278,6 +1288,7 @@ class ActorCriticRLModel(BaseRLModel):
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
+
         model.set_env(env)
         model.setup_model()
 
@@ -1370,6 +1381,7 @@ class OffPolicyRLModel(BaseRLModel):
         model.load_parameters(params, exact_match=False)
 
         return model
+
 
 class _UnvecWrapper(VecEnvWrapper):
     def __init__(self, venv):
