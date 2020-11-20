@@ -136,11 +136,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     return pi_MCP, mu_MCP, log_std_MCP
 
 
-# TODO
-def fuse_networks_GMM(mu_array, log_std_array, weight):
-    pass
-
-
 class SACPolicy(BasePolicy):
     """
     Policy object that implements a SAC-like actor critic

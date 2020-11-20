@@ -354,8 +354,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     with tf.variable_scope("model", reuse=False):
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
-                    test = True
-
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
                         # first return value corresponds to deterministic actions
@@ -433,11 +431,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                         qf1_pi = tf.reshape(qf1_pi,[-1])
                         logp_pi_mean = tf.reduce_mean(logp_pi)
-                        logp_pi_min = tf.math.reduce_min(logp_pi)
-                        logp_pi_max = tf.math.reduce_max(logp_pi)
                         qf1_pi_mean = tf.reduce_mean(qf1_pi)
-                        qf1_pi_min = tf.math.reduce_min(qf1_pi)
-                        qf1_pi_max = tf.math.reduce_max(qf1_pi)
                         
                         policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
@@ -509,20 +503,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
-                        tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
-                        tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
-                        tf.summary.scalar('1-1. logp_pi mean', logp_pi_mean)
-                        tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
-                        tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
-                        '''
-                        for name, value in primitives.items():
-                            pi_data = tf_util.get_trainable_vars('model/pi/'+name)
-                            for item in pi_data:
-                                print(item)
-                            #val_data = tf_util.get_trainable_vars('model/pi/'+name)
-                            tf.summary.histogram('model/pi/'+name.split('/')[1], pi_data)
-                            #tf.summary.histogram('model/values_fn/vf/'+name.split('/')[1], val_data)'''
+                        tf.summary.scalar('mean: qf1_pi', qf1_pi_mean)
+                        tf.summary.scalar('mean: logp_pi', logp_pi_mean)
+
                         if ent_coef_loss is not None:
                             tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                             tf.summary.scalar('ent_coef', self.ent_coef)
