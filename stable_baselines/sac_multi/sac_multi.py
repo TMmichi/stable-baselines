@@ -126,6 +126,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
         self.NGSAC = False
+        self.grad_logger = True
 
         if _init_setup_model:
             self.setup_model()
@@ -298,6 +299,12 @@ class SAC_MULTI(OffPolicyRLModel):
                         kloldnew = old_policy_tf.kl(self.policy_tf)
                         klgrads = tf.gradients(kloldnew, policy_var_list)
                     grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
+                    if self.grad_logger:
+                        self.grad_logger_op = {}
+                        for index, grad in enumerate(grads):
+                            print(grad)
+                            self.grad_logger_op[grad[0].name] = grad[0]
+                            self.grad_logger_op[grad[1].name] = grad[1]
 
                     if self.NGSAC:
                         new_grads = []
@@ -385,6 +392,12 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.params = tf_util.get_trainable_vars("model")
                 self.pi_params = tf_util.get_trainable_vars("model/pi")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
+                variable_list = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
+                self.get_variable_op = {}
+                for var in variable_list:
+                    if 'values_fn' not in var.name:
+                        self.get_variable_op[var.name] = var
+                print(self.get_variable_op)
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -566,15 +579,14 @@ class SAC_MULTI(OffPolicyRLModel):
                             start += var_size
                         print("tangets: ", tangents)
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
-                        self.grad_logger_op = {}
-                        for index, grad in enumerate(grads):
-                            print(grad)
-                            self.grad_logger_op[grad[1].name] = grad[1]
-                            #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        if self.grad_logger:
+                            self.grad_logger_op = {}
+                            for index, grad in enumerate(grads):
+                                print(grad)
+                                self.grad_logger_op[grad[1].name] = grad[1]
                         gvp = tf.add_n([tf.reduce_sum(grad * tangent)
                                     for (grad, tangent) in zipsame(grads, tangents)])
                         print('gvp: ', gvp)
-                        quit()
                         fvp = tf_util.flatgrad(gvp, policy_var_list)
                         compute_fvp = tf_util.function([flat_tangent], fvp)
                         def fisher_vector_product(vec):
@@ -653,6 +665,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
+                self.get_variable_op = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -682,19 +695,21 @@ class SAC_MULTI(OffPolicyRLModel):
         # Do one gradient step
         # and optionally compute log for tensorboard
         if writer is not None:
-            # logger = self.sess.run(self.grad_logger_op, feed_dict)
-            # self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            # self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
-            # self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            # for name,item in logger.items():
-            #     self.file_logger.writelines(str(name)+'\n')
-            #     self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
-            #     self.file_logger.writelines('\n')
-            #     self.file_mean_logger.writelines(str(name)+'\n')
-            #     self.file_mean_logger.writelines(str(np.mean(item)))
-            #     self.file_mean_logger.writelines('\n')
-            # self.file_logger.writelines('\n')
-            # self.file_mean_logger.writelines('\n')
+            if self.grad_logger:
+                logger = self.sess.run(self.grad_logger_op, feed_dict)
+                self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+                self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                for name,item in logger.items():
+                    print(name)
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines('\n')
             if self.NGSAC:
                 def fisher_vector_product(vec):
                     return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
@@ -718,7 +733,30 @@ class SAC_MULTI(OffPolicyRLModel):
                 assert np.isfinite(step_dir).all()
                 print("{0: 5.5f}".format(np.mean(grads - step_dir)/learning_rate))
                 feed_dict[self.step_dirs_ph] = step_dir
-
+            if self.grad_logger:
+                logger = self.sess.run(self.grad_logger_op, feed_dict)
+                variables = self.sess.run(self.get_variable_op, feed_dict)
+                self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+                self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_vars.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                for name,item in logger.items():
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
+                for name,item in variables.items():
+                    self.file_vars.writelines(str(name)+'\n')
+                    self.file_vars.writelines(str(np.mean(item)))
+                    if np.any(np.isnan(item)):
+                        self.file_vars.writelines('\nNAN in '+str(name)+'\n')
+                        self.file_vars.writelines(str(item))
+                    self.file_vars.writelines('\n')
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines('\n')
+                self.file_vars.writelines('\n')
             out = self.sess.run(self.step_ops, feed_dict)
 
         # Unpack to monitor losses and entropy
@@ -746,8 +784,10 @@ class SAC_MULTI(OffPolicyRLModel):
                 as writer:
 
             self._setup_learn()
-            #self.file_logger = open(save_path+"/gradient_logger.txt",'w')
-            #self.file_mean_logger = open(save_path+"/mean_gradient_logger.txt",'w')
+            if self.grad_logger:
+                self.file_vars = open("./vars_logger.txt",'w')
+                self.file_logger = open("./gradient_logger.txt",'w')
+                self.file_mean_logger = open("./mean_gradient_logger.txt",'w')
             np.set_printoptions(threshold=sys.maxsize)
 
             # Transform to callable if needed
@@ -829,7 +869,7 @@ class SAC_MULTI(OffPolicyRLModel):
                                 print(betas)
                                 #print(weights['level1_PoseControl/weight'])
                                 for i in range(len(unscaled_action)):
-                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
+                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.7f}'.format(alpha[0][i]), ', beta: {0:2.7f}'.format(beta[0][i]))
                                 
                 assert action.shape == self.env.action_space.shape
                 
@@ -940,10 +980,12 @@ class SAC_MULTI(OffPolicyRLModel):
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []
-                self.env.render()
+                # self.env.render()
             callback.on_training_end()
-            #self.file_logger.close()
-            #self.file_mean_logger.close()
+            if self.grad_logger:
+                self.file_vars.close()
+                self.file_logger.close()
+                self.file_mean_logger.close()
             return self
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):

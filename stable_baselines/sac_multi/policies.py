@@ -376,7 +376,7 @@ class FeedForwardPolicy(SACPolicy):
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
             self.alpha = tf.nn.softplus(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1 + EPS
-            self.beta = tf.nn.softplus(linear(pi_h, 'pi/dense_0', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1 + EPS
+            self.beta = tf.nn.softplus(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0)) + 1 + EPS
 
             # mu_ = tf.math.sigmoid(linear(pi_h, 'dense', self.ac_space.shape[0], init_scale=0.1, init_bias=0))*0.770+0.117
             # var = tf.math.sigmoid(linear(pi_h, 'dense_1', self.ac_space.shape[0], init_scale=0.1, init_bias=0))/100
@@ -395,14 +395,14 @@ class FeedForwardPolicy(SACPolicy):
         self.dist = tf.distributions.Beta(self.alpha, self.beta, validate_args=False, allow_nan_stats=True)
         
         pi_ = self.dist.sample()
-        pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
-        pi_ = tf.where(tf.math.is_nan(pi_), tf.zeros_like(pi_)+0.5, pi_)
-        pi_ = tf.debugging.check_numerics(pi_, "pi_ sieving USELESS")
+        # pi_ = tf.where(tf.math.is_inf(pi_), tf.zeros_like(pi_)+0.5, pi_)
+        # pi_ = tf.where(tf.math.is_nan(pi_), tf.zeros_like(pi_)+0.5, pi_)
+        # pi_ = tf.debugging.check_numerics(pi_, "pi_ sieving USELESS")
 
         logp_pi = self.dist.log_prob(pi_)
-        logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
-        logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
-        logp_pi = tf.debugging.check_numerics(logp_pi, 'logp_pi sieving USELESS')
+        # logp_pi = tf.where(tf.math.is_nan(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        # logp_pi = tf.where(tf.math.is_inf(logp_pi), tf.zeros_like(logp_pi)+1, logp_pi)
+        # logp_pi = tf.debugging.check_numerics(logp_pi, 'logp_pi sieving USELESS')
 
         #self.entropy = tf.debugging.check_numerics(dist.entropy(), "entropy Error")
         self.entropy = self.dist.entropy()
