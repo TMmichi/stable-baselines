@@ -125,6 +125,8 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
+        self.NGSAC = False
+        self.grad_logger = True
 
         if _init_setup_model:
             self.setup_model()
@@ -146,13 +148,17 @@ class SAC_MULTI(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
-                print("sess in sac_multi: ",self.sess)
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                  **self.policy_kwargs)
+                    old_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
+                                                **self.policy_kwargs)
+                    comp_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
+                                                **self.policy_kwargs)
+
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                      **self.policy_kwargs)
 
@@ -176,8 +182,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     # logp_pi is the log probability of actions taken by the policy
                     if self.box_dist == 'gaussian':
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                        with tf.variable_scope("old_policy", reuse=False):
+                            _, _, _ = old_policy_tf.make_actor(self.processed_obs_ph)
                     elif self.box_dist == 'beta':
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph)
+                        with tf.variable_scope("old_policy", reuse=False):
+                            _, _, _ = old_policy_tf.make_beta_actor(self.processed_obs_ph)
+                        with tf.variable_scope("comp_policy", reuse=False):
+                            _, _, _ = comp_policy_tf.make_beta_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -266,47 +278,57 @@ class SAC_MULTI(OffPolicyRLModel):
                     # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
                     #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
-                    policy_var_list = tf_util.get_trainable_vars('model/pi')
-                    logp_pi_grad = tf.gradients(tf.reduce_mean(logp_pi), policy_var_list)
-                    print('logp_pi_grad: ')
-                    for item in logp_pi_grad:
-                        print('\t',item)
-                    flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
-                    shapes = [var.get_shape().as_list() for var in policy_var_list]
-                    print('shapes: ',shapes)
-                    start = 0
-                    tangents = []
-                    for shape in shapes:
-                        var_size = tf_util.intprod(shape)
-                        tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
-                        start += var_size
-                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
-                    self.grad_logger_op = {}
-                    for index, grad in enumerate(grads):
-                        #print(grad)
-                        self.grad_logger_op[grad[1].name] = grad[1]
-                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
-                    gvp = tf.add_n([tf.reduce_sum(grad * tangent) for (grad, tangent) in zipsame(logp_pi_grad, tangents)])
-                    print('gvp: ',gvp)
-                    #fvp = tf_util.flatgrad(gvp, policy_var_list)
-                    fvp = tf.gradients(gvp, policy_var_list)
-                    print(fvp)
-                    quit()
-                    compute_fvp = tf_util.function([flat_tangent], fvp)
-                    def fisher_vector_product(vec):
-                        return compute_fvp(vec, sess=self.sess)
-                    step_dir = conjugate_gradient(fisher_vector_product, grads)
-                    assert np.isfinite(step_dir).all()
-                    #policy_train_op = policy_optimizer.apply_gradients(grads)
-                    policy_train_op = policy_optimizer.apply_gradients(step_dir)
-                    #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
 
-                    for var in tf_util.get_trainable_vars('model/pi'):
-                        #tf.summary.histogram(var.name, var)
-                        print("\t",var)
-                    for index, grad in enumerate(grads): 
-                        #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
-                        pass
+                    policy_var_new = tf_util.get_trainable_vars('model/pi')
+                    policy_var_old = tf_util.get_trainable_vars('model/old_policy/pi')
+                    policy_var_comp = tf_util.get_trainable_vars('model/comp_policy/pi')
+                    #policy_var_list = policy_var_new + policy_var_old
+                    policy_var_list = policy_var_new
+
+                    if self.NGSAC:
+                        flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
+                        shapes = [var.get_shape().as_list() for var in policy_var_list]
+                        print('shapes: ',shapes)
+                        start = 0
+                        tangents = []
+                        for shape in shapes:
+                            var_size = tf_util.intprod(shape)
+                            tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
+                            start += var_size
+                        
+                        kloldnew = old_policy_tf.kl(self.policy_tf)
+                        klgrads = tf.gradients(kloldnew, policy_var_list)
+                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
+                    if self.grad_logger:
+                        self.grad_logger_op = {}
+                        for index, grad in enumerate(grads):
+                            print(grad)
+                            self.grad_logger_op[grad[0].name] = grad[0]
+                            self.grad_logger_op[grad[1].name] = grad[1]
+
+                    if self.NGSAC:
+                        new_grads = []
+                        for v, grad in zip(policy_var_list, grads):
+                            grad0 = grad[0] if grad[0] is not None else tf.zeros_like(v)
+                            grad1 = grad[1] if grad[1] is not None else tf.zeros_like(v)
+                            new_grads.append((grad0,grad1))
+                        self.grads_op = new_grads
+
+                        gvp = tf.add_n([tf.reduce_sum(grad * tangent) for (grad, tangent) in zipsame(klgrads, tangents)])
+                        fvps = tf_util.flatgrad(gvp, policy_var_list)
+                        self.compute_fvp = tf_util.function([flat_tangent, self.observations_ph, self.actions_ph, self.next_observations_ph, self.rewards_ph], fvps)
+                        self.step_dirs_ph = tf.placeholder(dtype=tf.float32, shape=[None])
+                        step_dir_array = []
+                        start = 0
+                        for shape, grad in zip(shapes, new_grads):
+                            var_size = tf_util.intprod(shape)
+                            step_dir_array.append((tf.reshape(self.step_dirs_ph[start: start + var_size], shape), grad[1]))
+                            start += var_size
+
+                    if self.NGSAC:
+                        self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(step_dir_array)
+                    else:
+                        self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(grads)
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -314,10 +336,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                     target_params = tf_util.get_trainable_vars("target/values_fn/vf")
-
-                    # for var in target_params:
-                    #     tf.summary.histogram(var.name, var)
-                    #     print("\t",var)
 
                     # Polyak averaging for target variables
                     self.target_update_op = [
@@ -328,6 +346,16 @@ class SAC_MULTI(OffPolicyRLModel):
                     target_init_op = [
                         tf.assign(target, source)
                         for target, source in zip(target_params, source_params)
+                    ]
+
+                    self.assign_old_new_op = [
+                        tf.assign(var_old, var_new)
+                        for var_old, var_new in zip(policy_var_old, policy_var_new)
+                    ]
+
+                    self.assign_comp_new_op = [
+                        tf.assign(var_comp, var_new)
+                        for var_comp, var_new in zip(policy_var_comp, policy_var_new)
                     ]
 
                     # Control flow is used because sess.run otherwise evaluates in nondeterministic order
@@ -364,6 +392,12 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.params = tf_util.get_trainable_vars("model")
                 self.pi_params = tf_util.get_trainable_vars("model/pi")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
+                variable_list = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
+                self.get_variable_op = {}
+                for var in variable_list:
+                    if 'values_fn' not in var.name:
+                        self.get_variable_op[var.name] = var
+                print(self.get_variable_op)
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -412,8 +446,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         elif self.box_dist == 'beta':
                             self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_beta_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
-                    test = True
-
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
                         # first return value corresponds to deterministic actions
@@ -494,11 +526,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                         qf1_pi = tf.reshape(qf1_pi,[-1])
                         logp_pi_mean = tf.reduce_mean(logp_pi)
-                        logp_pi_min = tf.math.reduce_min(logp_pi)
-                        logp_pi_max = tf.math.reduce_max(logp_pi)
                         qf1_pi_mean = tf.reduce_mean(qf1_pi)
-                        qf1_pi_min = tf.math.reduce_min(qf1_pi)
-                        qf1_pi_max = tf.math.reduce_max(qf1_pi)
                         
                         policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
@@ -535,20 +563,24 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
                         shapes = [var.get_shape().as_list() for var in policy_var_list]
+                        print("shapes: ", shapes)
                         start = 0
                         tangents = []
                         for shape in shapes:
                             var_size = tf_util.intprod(shape)
+                            print('var_size: ', var_size)
                             tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
                             start += var_size
+                        print("tangets: ", tangents)
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
-                        self.grad_logger_op = {}
-                        for index, grad in enumerate(grads):
-                            print(grad)
-                            self.grad_logger_op[grad[1].name] = grad[1]
-                            #tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
+                        if self.grad_logger:
+                            self.grad_logger_op = {}
+                            for index, grad in enumerate(grads):
+                                print(grad)
+                                self.grad_logger_op[grad[1].name] = grad[1]
                         gvp = tf.add_n([tf.reduce_sum(grad * tangent)
                                     for (grad, tangent) in zipsame(grads, tangents)])
+                        print('gvp: ', gvp)
                         fvp = tf_util.flatgrad(gvp, policy_var_list)
                         compute_fvp = tf_util.function([flat_tangent], fvp)
                         def fisher_vector_product(vec):
@@ -612,12 +644,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('1-1. logp_pi mean', logp_pi_mean)
-                        # tf.summary.scalar('1-2. logp_pi min', logp_pi_min)
-                        # tf.summary.scalar('1-3. logp_pi max', logp_pi_max)
-                        tf.summary.scalar('2-1. qf1_pi mean', qf1_pi_mean)
-                        # tf.summary.scalar('2-2. qf1_pi min', qf1_pi_min)
-                        # tf.summary.scalar('2-3. qf1_pi max', qf1_pi_max)
+                        tf.summary.scalar('mean: qf1_pi', qf1_pi_mean)
+                        tf.summary.scalar('mean: logp_pi', logp_pi_mean)
+
                         if ent_coef_loss is not None:
                             tf.summary.scalar('ent_coef_loss', ent_coef_loss)
                             tf.summary.scalar('ent_coef', self.ent_coef)
@@ -627,6 +656,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
+                self.get_variable_op = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -637,21 +667,12 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, step, writer, learning_rate):
+        # Assign old policy to the new one
+        self.sess.run(self.assign_old_new_op)
+
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-        if np.any(np.isnan(batch_obs)):
-            print("NAN in batch_obs:")
-            print(batch_obs)
-        if np.any(np.isnan(batch_actions)):
-            print("NAN in batch_actions:")
-            print(batch_actions)
-        if np.any(np.isnan(batch_rewards)):
-            print("NAN in batch_rewards:")
-            print(batch_rewards)
-        if np.any(np.isnan(batch_next_obs)):
-            print("NAN in batch_next_obs:")
-            print(batch_next_obs)
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -662,33 +683,71 @@ class SAC_MULTI(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        # out  = [policy_loss, qf1_loss, qf2_loss,
-        #         value_loss, qf1, qf2, value_fn, logp_pi,
-        #         self.entropy, policy_train_op, train_values_op]
-
         # Do one gradient step
         # and optionally compute log for tensorboard
         if writer is not None:
-            logger = self.sess.run(self.grad_logger_op, feed_dict)
-            self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
-
-            self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-            for name,item in logger.items():
-                self.file_logger.writelines(str(name)+'\n')
-                self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+            if self.grad_logger:
+                logger = self.sess.run(self.grad_logger_op, feed_dict)
+                self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+                self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                for name,item in logger.items():
+                    print(name)
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
                 self.file_logger.writelines('\n')
-                self.file_mean_logger.writelines(str(name)+'\n')
-                self.file_mean_logger.writelines(str(np.mean(item)))
                 self.file_mean_logger.writelines('\n')
-                #print(name,item.shape[:])
-            self.file_logger.writelines('\n')
-            self.file_mean_logger.writelines('\n')
-            #print(" ")
+            if self.NGSAC:
+                def fisher_vector_product(vec):
+                    return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
+                grads = np.array(self.sess.run(self.grads_op, feed_dict))[:,0]
+                grads = np.concatenate([np.reshape(grad, np.prod(grad.shape)) for grad in grads],axis=0)
+                step_dir = conjugate_gradient(fisher_vector_product, grads)
+                assert np.isfinite(step_dir).all()
+                print("{0: 5.5f}".format(np.mean(grads - step_dir)/learning_rate))
+                feed_dict[self.step_dirs_ph] = step_dir
+
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)
         else:
+            if self.NGSAC:
+                def fisher_vector_product(vec):
+                    return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
+                grads = np.array(self.sess.run(self.grads_op, feed_dict))[:,0]
+                grads = np.concatenate([np.reshape(grad, np.prod(grad.shape)) for grad in grads],axis=0)
+                step_dir = conjugate_gradient(fisher_vector_product, grads)
+                assert np.isfinite(step_dir).all()
+                print("{0: 5.5f}".format(np.mean(grads - step_dir)/learning_rate))
+                feed_dict[self.step_dirs_ph] = step_dir
+            if self.grad_logger:
+                logger = self.sess.run(self.grad_logger_op, feed_dict)
+                variables = self.sess.run(self.get_variable_op, feed_dict)
+                self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+                self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                self.file_vars.writelines('######################### STEP: {}'.format(step)+' #########################\n')
+                for name,item in logger.items():
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
+                for name,item in variables.items():
+                    self.file_vars.writelines(str(name)+'\n')
+                    self.file_vars.writelines(str(np.mean(item)))
+                    if np.any(np.isnan(item)):
+                        self.file_vars.writelines('\nNAN in '+str(name)+'\n')
+                        self.file_vars.writelines(str(item))
+                    self.file_vars.writelines('\n')
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines('\n')
+                self.file_vars.writelines('\n')
             out = self.sess.run(self.step_ops, feed_dict)
 
         # Unpack to monitor losses and entropy
@@ -716,8 +775,10 @@ class SAC_MULTI(OffPolicyRLModel):
                 as writer:
 
             self._setup_learn()
-            self.file_logger = open(save_path+"/gradient_logger.txt",'w')
-            self.file_mean_logger = open(save_path+"/mean_gradient_logger.txt",'w')
+            if self.grad_logger:
+                self.file_vars = open("./vars_logger.txt",'w')
+                self.file_logger = open("./gradient_logger.txt",'w')
+                self.file_mean_logger = open("./mean_gradient_logger.txt",'w')
             np.set_printoptions(threshold=sys.maxsize)
 
             # Transform to callable if needed
@@ -762,8 +823,8 @@ class SAC_MULTI(OffPolicyRLModel):
                         action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                         unscaled_action = unscale_action(self.action_space, action)
                     elif self.box_dist == 'beta':
-                        action, mode, mu, std, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
-                        weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
+                        action, mode, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
+                        #weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                         action = action.flatten() * 2 - 1
                         if np.any(np.isnan(mode)):
                             nan_num += 1
@@ -771,7 +832,7 @@ class SAC_MULTI(OffPolicyRLModel):
                             action[np.isnan(action)] = 0
                             if nan_num > 100:
                                 quit()
-                        data_past = [action, mode, mu, std, alpha, beta] 
+                        data_past = [action, mode, alpha, beta] 
 
                     # Add noise to the action (improve exploration,
                     # not needed in general)
@@ -786,30 +847,25 @@ class SAC_MULTI(OffPolicyRLModel):
                         if step % 200 == 0:
                             try:
                                 prim_actions = self.policy_tf.get_primitive_action(obs[None])
-                                weights = self.policy_tf.get_weight(obs[None])
+                                #weights = self.policy_tf.get_weight(obs[None])
                                 alphas, betas = self.policy_tf.get_primitive_param(obs[None])
                             except Exception:
                                 pass
                             if len(unscaled_action) == 1:
-                                print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
+                                #print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
+                                print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
                             else:
                                 print(prim_actions)
                                 print(alphas)
                                 print(betas)
-                                print(weights['level1_PoseControl/weight'])
+                                #print(weights['level1_PoseControl/weight'])
                                 for i in range(len(unscaled_action)):
-                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.3f}'.format(alpha[0][i]), ', beta: {0:2.3f}'.format(beta[0][i]))
+                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.7f}'.format(alpha[0][i]), ', beta: {0:2.7f}'.format(beta[0][i]))
                                 
-
                 assert action.shape == self.env.action_space.shape
-
-                # try:
-                #     weight = self.policy_tf.get_weight(obs[None])
-                #     new_obs, reward, done, info = self.env.step(unscaled_action, weight[0])
-                # except Exception:
-                #     new_obs, reward, done, info = self.env.step(unscaled_action)
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action, weight)
+                new_obs, reward, done, info = self.env.step(unscaled_action)
+                #new_obs, reward, done, info = self.env.step(unscaled_action, weight)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
@@ -826,24 +882,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     obs_, new_obs_, reward_ = obs, new_obs, reward
 
                 # Store transition in the replay buffer.
-                if np.any(np.isnan(obs_)):
-                    print("NAN in obs_:")
-                    print(obs_)
-                    print("\tData: ")
-                    print(obs_, action, reward_, new_obs_)
-                
-                if np.any(np.isnan(action)):
-                    print("NAN in action:")
-                    print(action)
-                    print("\tData: ")
-                    print(obs_, action, reward_, new_obs_)
-                
-                if np.any(np.isnan(reward_)):
-                    print("NAN in reward_:")
-                    print(reward_)
-                    print("\tData: ")
-                    print(obs_, action, reward_, new_obs_)
-
                 self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 obs = new_obs
                 # Save the unnormalized observation
@@ -933,9 +971,12 @@ class SAC_MULTI(OffPolicyRLModel):
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []
+                # self.env.render()
             callback.on_training_end()
-            self.file_logger.close()
-            self.file_mean_logger.close()
+            if self.grad_logger:
+                self.file_vars.close()
+                self.file_logger.close()
+                self.file_mean_logger.close()
             return self
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
