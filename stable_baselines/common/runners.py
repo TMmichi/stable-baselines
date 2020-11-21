@@ -158,7 +158,6 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
         else:
             observation, reward, done, info = env.step(clipped_action[0])
             true_reward = reward
-        print('\033[92m'+"Step {0} | Reward {1:.5f}".format(current_it_len + 1, reward)+'\033[0m')
 
         if callback is not None:
             if callback.on_step() is False:
