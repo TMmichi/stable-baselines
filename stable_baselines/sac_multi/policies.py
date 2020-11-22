@@ -9,8 +9,8 @@ from stable_baselines.common.tf_layers import mlp, linear
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
-LOG_STD_MAX = 10
-LOG_STD_MIN = -20
+LOG_STD_MAX = 5
+LOG_STD_MIN = -5
 debug = False
 
 
@@ -67,7 +67,7 @@ def apply_squashing_func(mu_, pi_, logp_pi):
     return deterministic_policy, policy, logp_pi
 
 
-def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
+def fuse_networks_MCP_old(mu_array, log_std_array, weight, act_index, total_action_dimension):
     """
     Fuse distributions of policy into a MCP fashion
 
@@ -113,6 +113,35 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     
     return pi_MCP, mu_MCP, log_std_MCP
 
+def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
+    """
+    Fuse distributions of policy into a MCP fashion
+
+    :param mu_array: ([tf.Tensor]) List of means
+    :param log_std_array: ([tf.Tensor]) List of log of the standard deviations
+    :param weight: (tf.Tensor) Weight tensor of each primitives
+    :param act_index: (list) List of action indices for each primitives
+    :param total_action_dimension: (int) Dimension of a total action
+    :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
+    """
+    with tf.variable_scope("fuse"):
+        mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
+        for i in range(len(mu_array)):
+            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
+            mu_weighted_i = mu_array[i] * normed_weight_index
+            shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
+            for j, index in enumerate(act_index[i]):
+                shaper[j][index] = 1
+            mu_temp += tf.matmul(mu_weighted_i, shaper)
+            std_sum += tf.matmul(normed_weight_index, shaper)
+        std_MCP = tf.math.reciprocal_no_nan(std_sum)
+        mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
+        log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
+        pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
+    
+    return pi_MCP, mu_MCP, log_std_MCP
+
 def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_action_dimension):
     """
     Fuse distributions of policy into a MCP fashion
@@ -129,11 +158,6 @@ def fuse_networks_betaMCP(alpha_array, beta_array, weight, act_index, total_acti
         weight_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(alpha_array)): #primitive-wise alpha/beta
             # weight: [batch][total action]
-            # if i == 0:
-            #     mult = 0.1
-            # else:
-            #     mult = 1
-            #weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value])) * mult
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,alpha_array[i][0].shape[0].value]))
             # make alpha [batch][own action] -> [batch][total action]
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
@@ -473,26 +497,17 @@ class FeedForwardPolicy(SACPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
 
-        #pi_MCP = tf.Print(pi_MCP,[pi_MCP, tf.shape(pi_MCP)], "pi_MCP = ", summarize=-1)
-        #mu_MCP = tf.Print(mu_MCP,[mu_MCP, tf.shape(mu_MCP)], "mu_MCP = ", summarize=-1)
-        #log_std_MCP = tf.Print(log_std_MCP,[log_std_MCP, tf.shape(log_std_MCP)], "log_std_MCP = ", summarize=-1)
-        tf.summary.histogram('mu_MCP_lin', mu_MCP[:,0])
-        tf.summary.histogram('mu_MCP_ang', mu_MCP[:,1])
-        tf.summary.histogram('std_MCP_lin', tf.exp(log_std_MCP[:,0]))
-        tf.summary.histogram('std_MCP_ang', tf.exp(log_std_MCP[:,1]))
-        tf.summary.merge_all()
-
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         #logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
 
         self.std = tf.exp(log_std_MCP)
-        self.policy_train = pi_MCP
-        self.deterministic_policy_train = self.act_mu = mu_MCP
+        self.policy = policy = pi_MCP
+        self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
 
         # policies with squashing func at test time
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
-        self.policy = policy
-        self.deterministic_policy = deterministic_policy
+        # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        # self.policy = policy
+        # self.deterministic_policy = deterministic_policy
 
         return deterministic_policy, policy, logp_pi
     
@@ -618,15 +633,41 @@ class FeedForwardPolicy(SACPolicy):
                             pi_h = tf.layers.flatten(obs)
                         
                         #------------- Input observation sieving layer -------------#
+                        index_pair = {}
                         sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
+                            index_pair[item['obs'][1][i]] = i
                             sieve_layer[item['obs'][1][i]][i] = 1
                         pi_h = tf.matmul(pi_h, sieve_layer)
                         #------------- Observation sieving layer End -------------#
 
+                        if 'substract' in item['obs_relativity'].keys():
+                            ref = item['obs_relativity']['subtract']['ref']
+                            tar = item['obs_relativity']['subtract']['tar']
+                            assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
+                            ref_sieve = np.zeros([pi_h.shape[1].value, len(ref)], dtype=np.float32)
+                            tar_sieve = np.zeros([pi_h.shape[1].value, len(tar)], dtype=np.float32)
+                            remainder_list = list(range(pi_h.shape[1].value))
+                            for i in range(len(ref)):
+                                remainder_list.remove(index_pair[ref[i]])
+                                remainder_list.remove(index_pair[tar[i]])
+                                ref_sieve[index_pair[ref[i]]][i] = 1
+                                tar_sieve[index_pair[tar[i]]][i] = 1
+                            ref_obs = tf.matmul(pi_h, ref_sieve)
+                            tar_obs = tf.matmul(pi_h, tar_sieve)
+                            subs_obs = ref_obs - tar_obs
+                            if not len(remainder_list) == 0:
+                                remainder = pi_h.shape[1].value - (len(ref) + len(tar))
+                                left_sieve = np.zeros([pi_h.shape[1].value, remainder], dtype=np.float32)
+                                for j in range(len(remainder_list)):
+                                    left_sieve[remainder_list[j]][j] = 1
+                                rem_obs = tf.matmul(pi_h, left_sieve)
+                                pi_h = tf.concat([subs_obs, rem_obs])
+
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
-                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)
+                        
                         #mu_ = tf.tanh(mu_)
                         #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
                         tf.summary.histogram('mu', mu_)

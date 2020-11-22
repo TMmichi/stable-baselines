@@ -5,8 +5,8 @@ from gym import spaces
 
 from stable_baselines.common.tf_layers import linear
 
-LOG_STD_MAX = 10
-LOG_STD_MIN = -20
+LOG_STD_MAX = 5
+LOG_STD_MIN = -5
 
 
 class ProbabilityDistribution(object):

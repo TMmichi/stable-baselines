@@ -126,7 +126,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
         self.NGSAC = False
-        self.grad_logger = True
+        self.grad_logger = False
 
         if _init_setup_model:
             self.setup_model()
@@ -546,65 +546,40 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         # Policy train op
                         # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
-                        #policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                        policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
+                        policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                        # policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                         # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
-                        # TODO Q: If not contained in the train_op, will gradients of these variables be excluded?
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
-                        print("Policy optimizee: ")
+                        # print("Policy optimizee: ")
                         # for var in policy_var_list:
                         #     tf.summary.histogram(var.name, var)
                         #     print("\t",var)
-                        policy_var_freeze = tf_util.get_trainable_vars('model/pi/freeze')
-                        print("Policy NOT optimizee: ")
+                        # policy_var_freeze = tf_util.get_trainable_vars('model/pi/freeze')
+                        # print("Policy NOT optimizee: ")
                         # for var in policy_var_freeze:
                         #     tf.summary.histogram(var.name, var)
                         #     print("\t",var)
 
-                        flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
-                        shapes = [var.get_shape().as_list() for var in policy_var_list]
-                        print("shapes: ", shapes)
-                        start = 0
-                        tangents = []
-                        for shape in shapes:
-                            var_size = tf_util.intprod(shape)
-                            print('var_size: ', var_size)
-                            tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
-                            start += var_size
-                        print("tangets: ", tangents)
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                         if self.grad_logger:
                             self.grad_logger_op = {}
                             for index, grad in enumerate(grads):
-                                print(grad)
                                 self.grad_logger_op[grad[1].name] = grad[1]
-                        gvp = tf.add_n([tf.reduce_sum(grad * tangent)
-                                    for (grad, tangent) in zipsame(grads, tangents)])
-                        print('gvp: ', gvp)
-                        fvp = tf_util.flatgrad(gvp, policy_var_list)
-                        compute_fvp = tf_util.function([flat_tangent], fvp)
-                        def fisher_vector_product(vec):
-                            return compute_fvp(vec, sess=self.sess)
-                        step_dir = conjugate_gradient(fisher_vector_product, grads)
-                        assert np.isfinite(step_dir).all()
-                        #policy_train_op = policy_optimizer.apply_gradients(grads)
-                        policy_train_op = policy_optimizer.apply_gradients(step_dir)
-                        #policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_var_list)
+                        policy_train_op = policy_optimizer.apply_gradients(grads)
 
                         # Value train op
                         value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                        # TODO: Q: should value function be always fine-tunable?
                         values_params = tf_util.get_trainable_vars('model/values_fn/\w*/train')
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
-                        print("Source optimizee: ")
+                        # print("Source optimizee: ")
                         # for var in source_params_trainable:
                         #     tf.summary.histogram(var.name, var)
                         #     print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
-                        print("Target optimizee: ")
-                        for var in target_params_trainable:
-                            print("\t",var)
+                        # print("Target optimizee: ")
+                        # for var in target_params_trainable:
+                        #     print("\t",var)
 
                         source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                         target_params = tf_util.get_trainable_vars("target/values_fn/vf")
@@ -1040,10 +1015,6 @@ class SAC_MULTI(OffPolicyRLModel):
             "tau": self.tau,
             "ent_coef": self.ent_coef if isinstance(self.ent_coef, float) else 'auto',
             "target_entropy": self.target_entropy,
-            # Should we also store the replay buffer?
-            # this may lead to high memory usage
-            # with all transition inside
-            # "replay_buffer": self.replay_buffer
             "gamma": self.gamma,
             "verbose": self.verbose,
             "observation_space": self.observation_space,

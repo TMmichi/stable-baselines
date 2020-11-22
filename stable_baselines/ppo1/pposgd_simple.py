@@ -195,8 +195,8 @@ class PPO1(ActorCriticRLModel):
                 self.compute_losses = tf_util.function([obs_ph, old_pi.obs_ph, action_ph, atarg, ret, lrmult],
                                                        losses)
 
-    def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="PPO1",
-              reset_num_timesteps=True):
+    def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="PPO1", 
+              reset_num_timesteps=True, save_interval=0, save_path=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
@@ -340,6 +340,10 @@ class PPO1(ActorCriticRLModel):
                     logger.record_tabular("TimeElapsed", time.time() - t_start)
                     if self.verbose >= 1 and MPI.COMM_WORLD.Get_rank() == 0:
                         logger.dump_tabular()
+                    if save_interval and save_path != None:
+                        if (iters_so_far+1) % save_interval == 0:
+                            print("saved")
+                            self.save(save_path+"/policy_"+str(timesteps_so_far+1))
         callback.on_training_end()
         return self
 
