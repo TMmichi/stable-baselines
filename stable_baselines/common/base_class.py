@@ -238,7 +238,7 @@ class BaseRLModel(ABC):
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
 
-    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, act_scale, obs_relativity, layer_structure, loaded_policy=None, load_value=True):
+    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, act_scale, obs_relativity, layer_structure, subgoal=None, loaded_policy=None, load_value=True):
         '''
         Returns info of the primitive as a dictionary
 
@@ -252,6 +252,7 @@ class BaseRLModel(ABC):
         :param act_scale: (int) action scale
         :param obs_relativity: (dict) a dictionary of observation index-relativity
         :param layer_structure: (dict) layer structure of the primitive policy/value
+        :param subgoal: (dict) a dictionary containing [primitive name, subgoal->obs index]
         :param loaded_policy: ((dict, dict)) tuple of data and parameters for pretrained policy.zip
         :param load_value: (bool) load separate value network for the primitive
         :return: (dict: {'obs':tuple, 'act':tuple, 'layer':dict}) primitive information
@@ -306,6 +307,7 @@ class BaseRLModel(ABC):
             act_space = gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32)
             act = (act_space, act_index)
 
+            assert (name == 'weight') and subgoal is not None, "Error: Only weight primitive can have subgoal argument"
             policy_layer_structure = layer_structure['policy']
             value_layer_structure = layer_structure.get('value',None)
             tails = None
@@ -362,7 +364,7 @@ class BaseRLModel(ABC):
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'act_scale': act_scale, 'obs_relativity': obs_relativity, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
+        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'act_scale': act_scale, 'obs_relativity': obs_relativity, 'subgoal': subgoal, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
         
     @staticmethod
     def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value):

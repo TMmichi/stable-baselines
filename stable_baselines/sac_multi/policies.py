@@ -318,6 +318,7 @@ class FeedForwardPolicy(SACPolicy):
         self.policy_layers = layers.get('policy',[64,64])
         self.value_layers = layers.get('value',[64,64])
         self.weight = {}
+        self.subgoal = {}
         self.primitive_actions = {}
         self.primitive_log_std = {}
         self.primitive_alpha = {}
@@ -600,31 +601,49 @@ class FeedForwardPolicy(SACPolicy):
         act_index = []
         weight = None
 
+        # Weight setup
+        for name in tails:
+            if 'weight' in name.split('/'):
+                item = primitives[name]
+                layer_name = item['layer_name'] if item['main_tail'] else name
+                with tf.variable_scope(layer_name, reuse=reuse):
+                    if self.feature_extraction == "cnn":
+                        pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                        raise NotImplementedError("Image input not supported for now")
+                    else:
+                        pi_h = tf.layers.flatten(obs)
+                    
+                    #------------- Input observation sieving layer -------------#
+                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                    for i in range(len(item['obs'][1])):
+                        sieve_layer[item['obs'][1][i]][i] = 1
+                    pi_h = tf.matmul(pi_h, sieve_layer)
+                    #------------- Observation sieving layer End -------------#
+
+                    pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+
+                    weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                    tf.summary.histogram(" ", weight)
+                    self.weight[name] = weight
+
+                    subgoal_dict = {}
+                    if item.get('subgoal', None) is not None:
+                        for prim_name, obs_idx in item['subgoal'].items():
+                            assert prim_name in tails, "Error: name of the target primitive not in tails"
+                            with tf.variable_scope('subgoal_'+prim_name, reuse=False):
+                                subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation=None)
+                                self.subgoal[name] = subgoal_obs
+                                subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
+
+        # Primitive setup
         for name in tails:
             item = primitives[name]
             layer_name = item['layer_name'] if item['main_tail'] else name
+            if subgoal_dict.get(name, None) is not None:
+                replace_obs, replace_obs_idx = subgoal_dict[name]
+
             if item['tails'] == None:
-                if 'weight' in name.split('/'):
-                    with tf.variable_scope(layer_name, reuse=reuse):
-                        if self.feature_extraction == "cnn":
-                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
-                            raise NotImplementedError("Image input not supported for now")
-                        else:
-                            pi_h = tf.layers.flatten(obs)
-                        
-                        #------------- Input observation sieving layer -------------#
-                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                        for i in range(len(item['obs'][1])):
-                            sieve_layer[item['obs'][1][i]][i] = 1
-                        pi_h = tf.matmul(pi_h, sieve_layer)
-                        #------------- Observation sieving layer End -------------#
-
-                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-
-                        weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
-                        tf.summary.histogram(" ", weight)
-                        self.weight[name] = weight
-                else:
+                if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
