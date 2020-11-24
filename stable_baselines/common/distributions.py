@@ -239,10 +239,10 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         """
         return self.probability_distribution_class()(flat, self.squash)
 
-    def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0, std_from_obs=False):
+    def proba_distribution_from_latent(self, pi_latent_vector, vf_latent_vector, init_scale=1.0, init_bias=0.0, stv_from_obs=False):
         mean = linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
-        if std_from_obs:
+        if stv_from_obs:
             logstd = linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias)
             logstd = tf.clip_by_value(logstd, LOG_STD_MIN, LOG_STD_MAX)
             pdparam = tf.concat([mean, logstd], axis=1)

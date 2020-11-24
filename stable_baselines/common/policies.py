@@ -600,7 +600,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
             else:
                 new_obs = sieved_obs
             # new_obs = tf.Print(new_obs,[new_obs,],"new_obs: ",summarize=-1)
-            
+
             if feature_extraction == "cnn":
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
             else:
@@ -611,7 +611,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
 
             if self.box_dist == 'gaussian':
                 self._proba_distribution, self._policy, self.q_value, self.logstd = \
-                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01, std_from_obs=True)
+                    self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01, stv_from_obs=True)
             elif self.box_dist == 'beta':
                 self._proba_distribution, self._policy, self.q_value = \
                     self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.1, init_bias=0.3)

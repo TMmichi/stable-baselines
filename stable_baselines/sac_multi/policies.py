@@ -619,11 +619,8 @@ class FeedForwardPolicy(SACPolicy):
                         sieve_layer[item['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
-
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-
                     weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
-                    tf.summary.histogram(" ", weight)
                     self.weight[name] = weight
 
                     subgoal_dict = {}
@@ -633,7 +630,11 @@ class FeedForwardPolicy(SACPolicy):
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
                                 subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation=None)
                                 self.subgoal[name] = subgoal_obs
+                                # subgoal index: in increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
+                break
+        else:
+            raise NotImplementedError("Weight layer not in tail")
 
         # Primitive setup
         for name in tails:
@@ -641,19 +642,28 @@ class FeedForwardPolicy(SACPolicy):
             layer_name = item['layer_name'] if item['main_tail'] else name
             if subgoal_dict.get(name, None) is not None:
                 replace_obs, replace_obs_idx = subgoal_dict[name]
+                replace_layer = np.zeros([len(replace_obs_idx), obs.shape[1].value], dtype=np.float32)
+                replace_cond = np.ones(obs.shape[1].value, dtype=np.int8)
+                for i, idx in enumerate(replace_obs_idx):
+                    replace_layer[i][idx] = 1
+                    replace_cond[idx] = 0
+                replace_obs = tf.matmul(replace_obs, replace_layer)
+                new_obs = tf.where(replace_cond, obs, replace_obs)
+            else:
+                new_obs = obs
 
             if item['tails'] == None:
                 if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
-                            pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                            pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
                             raise NotImplementedError("Image input not supported for now")
                         else:
-                            pi_h = tf.layers.flatten(obs)
+                            pi_h = tf.layers.flatten(new_obs)
                         
                         #------------- Input observation sieving layer -------------#
                         index_pair = {}
-                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
+                        sieve_layer = np.zeros([new_obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
                         for i in range(len(item['obs'][1])):
                             index_pair[item['obs'][1][i]] = i
                             sieve_layer[item['obs'][1][i]][i] = 1
@@ -685,10 +695,9 @@ class FeedForwardPolicy(SACPolicy):
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
+                        # if aux, then the produced action becomes scaled
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)
                         
-                        #mu_ = tf.tanh(mu_)
-                        #mu_ = tf.Print(mu_,[mu_],"\tmu - {0} = ".format(name), summarize=-1)
                         tf.summary.histogram('mu', mu_)
                         mu_array.append(mu_)
                         self.primitive_actions[name] = mu_
@@ -701,17 +710,16 @@ class FeedForwardPolicy(SACPolicy):
 
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        #log_std = tf.Print(log_std,[log_std],"\tlog_std - {0} = ".format(name), summarize=-1)
                         tf.summary.histogram('std', tf.exp(log_std))
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
 
                         self.entropy += gaussian_entropy(log_std)
-                        tf.summary.merge_all()
+                        tf.summary.merge_all()             
             else:
                 with tf.variable_scope(layer_name, reuse=reuse):
-                    _, mu_, log_std_ = self.construct_actor_graph(obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
+                    _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
                 mu_array.append(mu_)
                 log_std_array.append(log_std_)
                 act_index.append(item['act'][1])
