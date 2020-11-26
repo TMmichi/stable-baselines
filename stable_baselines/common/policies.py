@@ -586,8 +586,10 @@ class FeedForwardPolicy(ActorCriticPolicy):
                     tar_sieve[index_pair[tar[i]]][i] = 1
                 ref_obs = tf.matmul(sieved_obs, ref_sieve)
                 tar_obs = tf.matmul(sieved_obs, tar_sieve)
+                # ref_obs = tf.Print(ref_obs, [ref_obs,],"ref_obs: ", summarize=-1)
+                # tar_obs = tf.Print(tar_obs, [tar_obs,],"tar_obs: ", summarize=-1)
                 subs_obs = ref_obs - tar_obs
-                # subs_obs = tf.Print(subs_obs,[subs_obs,],"subtracted_obs: ")
+                # subs_obs = tf.Print(subs_obs,[subs_obs,],"subtracted_obs: ", summarize=-1)
                 if not len(remainder_list) == 0:
                     remainder = sieved_obs.shape[1].value - (len(ref) + len(tar))
                     left_sieve = np.zeros([sieved_obs.shape[1].value, remainder], dtype=np.float32)
