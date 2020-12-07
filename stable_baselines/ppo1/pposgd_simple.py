@@ -343,7 +343,7 @@ class PPO1(ActorCriticRLModel):
                     if save_interval and save_path != None:
                         if (iters_so_far+1) % save_interval == 0:
                             print("saved")
-                            self.save(save_path+"/policy_"+str(timesteps_so_far+1))
+                            self.save(save_path+"/policy_"+str(iters_so_far+1))
         callback.on_training_end()
         return self
 
