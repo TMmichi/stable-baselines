@@ -596,9 +596,16 @@ class FeedForwardPolicy(ActorCriticPolicy):
                     for j in range(len(remainder_list)):
                         left_sieve[remainder_list[j]][j] = 1
                     rem_obs = tf.matmul(sieved_obs, left_sieve)
-                    new_obs = tf.concat([subs_obs, rem_obs],axis=-1)
+                    new_obs = tf.concat([subs_obs, rem_obs], axis=-1)
                 else:
                     new_obs = subs_obs
+                if 'leave' in obs_relativity.keys():
+                    leave = obs_relativity['leave']
+                    leave_sieve = np.zeros([sieved_obs.shape[1].value, len(leave)], dtype=np.float32)
+                    for i in range(len(leave)):
+                        leave_sieve[index_pair[leave[i]]][i] = 1
+                    leave_obs = tf.matmul(sieved_obs, leave_sieve)
+                    new_obs = tf.concat([new_obs, leave_obs], axis=-1)
             else:
                 new_obs = sieved_obs
             # new_obs = tf.Print(new_obs,[new_obs,],"new_obs: ",summarize=-1)

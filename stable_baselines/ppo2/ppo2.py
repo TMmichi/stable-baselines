@@ -391,7 +391,7 @@ class PPO2(ActorCriticRLModel):
                                                 writer, self.num_timesteps)
                 print(update, n_updates)
                 if save_interval and save_path != None:
-                    if (update+1) % int(save_interval/self.n_batch) == 0 and update:
+                    if (update+1) % int(save_interval) == 0 and update:
                         print("saved")
                         self.save(save_path+"/policy_"+str(update*self.n_batch+loaded_step_num+1))
 
@@ -499,14 +499,6 @@ class Runner(AbstractEnvRunner):
                     if isinstance(self.env.action_space, gym.spaces.Box):
                         clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             
-            if iteration == self.n_steps-1:
-                alpha, beta, mu, var = self.model.act_model.proba_step(self.obs)
-                print('steps: ', self.n_steps)
-                print('\taction: {0}\t'.format(clipped_actions.reshape((-1))))
-                print("\talphas: ", alpha.reshape((-1)))
-                print('\tbetas: ', beta.reshape((-1)))
-                print('\tmus: ', mu.reshape((-1)))
-                print('\tvars: ', var.reshape((-1)))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
 
             self.model.num_timesteps += self.n_envs

@@ -643,7 +643,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate):
         # Assign old policy to the new one
-        self.sess.run(self.assign_old_new_op)
+        # self.sess.run(self.assign_old_new_op)
 
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
@@ -797,6 +797,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     if self.box_dist == 'gaussian':
                         action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                         unscaled_action = unscale_action(self.action_space, action)
+                        # weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                     elif self.box_dist == 'beta':
                         action, mode, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
                         #weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
@@ -817,7 +818,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     unscaled_action = unscale_action(self.action_space, action)
                     if self.box_dist == 'gaussian':
                         if step % 200 == 0:
-                            print('action: {0: 2.3f}'.format(unscaled_action[0]))
+                            pass
+                            # print('action: {0: 2.3f}'.format(unscaled_action[0]))
+                            # print('action: ', unscaled_action)
+                            # print(weight)
                     elif self.box_dist == 'beta':
                         if step % 200 == 0:
                             try:
@@ -840,7 +844,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 assert action.shape == self.env.action_space.shape
                 
                 new_obs, reward, done, info = self.env.step(unscaled_action)
-                #new_obs, reward, done, info = self.env.step(unscaled_action, weight)
+                # new_obs, reward, done, info = self.env.step(unscaled_action, weight)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards

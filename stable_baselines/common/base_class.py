@@ -307,7 +307,7 @@ class BaseRLModel(ABC):
             act_space = gym.spaces.Box(act_range_min, act_range_max, dtype=np.float32)
             act = (act_space, act_index)
 
-            assert (name == 'weight') and subgoal is not None, "Error: Only weight primitive can have subgoal argument"
+            assert (name != 'weight') and subgoal is None, "Error: Only weight primitive can have subgoal argument"
             policy_layer_structure = layer_structure['policy']
             value_layer_structure = layer_structure.get('value',None)
             tails = None
@@ -416,6 +416,7 @@ class BaseRLModel(ABC):
         '''
         obs, _ = argument_tuple
         obs_dim = len(obs[1])
+        print(obs_dim)
         policy_layer_structure = []
         value_layer_structure = []
         # if loaded for pretraining: model/pi/fc0/kernel:0
@@ -423,8 +424,9 @@ class BaseRLModel(ABC):
         for name, value in loaded_policy_dict.items():
             if name.find("pi/fc") > -1:
                 if name.find("fc0/kernel") > -1:
-                    assert obs_dim == value.shape[0], \
-                        "\n\t\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption occured\033[0m"
+                    pass
+                    # assert obs_dim == value.shape[0], \
+                    #     "\n\t\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption occured\033[0m"
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
             if load_value:

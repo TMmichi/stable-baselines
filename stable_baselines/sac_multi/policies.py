@@ -448,7 +448,7 @@ class FeedForwardPolicy(SACPolicy):
                      create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
-
+        print(reuse)
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
                 critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -670,7 +670,8 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = tf.matmul(pi_h, sieve_layer)
                         #------------- Observation sieving layer End -------------#
 
-                        if 'substract' in item['obs_relativity'].keys():
+                        if 'subtract' in item['obs_relativity'].keys():
+                            print("IN SUBTRACT")
                             ref = item['obs_relativity']['subtract']['ref']
                             tar = item['obs_relativity']['subtract']['tar']
                             assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
@@ -691,7 +692,9 @@ class FeedForwardPolicy(SACPolicy):
                                 for j in range(len(remainder_list)):
                                     left_sieve[remainder_list[j]][j] = 1
                                 rem_obs = tf.matmul(pi_h, left_sieve)
-                                pi_h = tf.concat([subs_obs, rem_obs])
+                                pi_h = tf.concat([subs_obs, rem_obs], axis=-1)
+                            else:
+                                pi_h = subs_obs
 
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
