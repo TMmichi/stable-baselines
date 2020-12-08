@@ -182,8 +182,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     # logp_pi is the log probability of actions taken by the policy
                     if self.box_dist == 'gaussian':
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
-                        with tf.variable_scope("old_policy", reuse=False):
-                            _, _, _ = old_policy_tf.make_actor(self.processed_obs_ph)
                     elif self.box_dist == 'beta':
                         self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph)
                         with tf.variable_scope("old_policy", reuse=False):
