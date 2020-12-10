@@ -748,7 +748,7 @@ class BaseRLModel(ABC):
 
     @classmethod
     @abstractmethod
-    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
+    def load(cls, load_path, policy=None, env=None, custom_objects=None, **kwargs):
         """
         Load the model from file
 
@@ -1113,7 +1113,6 @@ class ActorCriticRLModel(BaseRLModel):
         super(ActorCriticRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
                                                  policy_base=policy_base, policy_kwargs=policy_kwargs,
                                                  seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
-
         self.sess = None
         self.initial_state = None
         self.step = None
@@ -1269,7 +1268,7 @@ class ActorCriticRLModel(BaseRLModel):
         pass
 
     @classmethod
-    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
+    def load(cls, load_path, policy=None, env=None, custom_objects=None, **kwargs):
         """
         Load the model from file
 
@@ -1290,7 +1289,6 @@ class ActorCriticRLModel(BaseRLModel):
             raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
                              "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
                                                                               kwargs['policy_kwargs']))
-
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
@@ -1354,7 +1352,7 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @classmethod
-    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
+    def load(cls, load_path, policy=None, env=None, custom_objects=None, **kwargs):
         """
         Load the model from file
 
@@ -1370,12 +1368,16 @@ class OffPolicyRLModel(BaseRLModel):
         :param kwargs: extra arguments to change the model when loading
         """
         data, params = cls._load_from_file(load_path, custom_objects=custom_objects)
-
         if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
             raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
                              "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
                                                                               kwargs['policy_kwargs']))
-        model = cls(policy=data["policy"], env=None, _init_setup_model=False)
+        if policy is not None:
+            policy_model = policy
+            data.pop('policy')
+        else:
+            policy_model = data['policy']
+        model = cls(policy=policy_model, env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
         

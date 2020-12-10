@@ -315,8 +315,16 @@ class FeedForwardPolicy(SACPolicy):
         self.cnn_kwargs = kwargs
         self.cnn_extractor = cnn_extractor
         self.reuse = reuse
-        self.policy_layers = layers.get('policy',[64,64])
-        self.value_layers = layers.get('value',[64,64])
+        if layers.get('policy', None) is None and kwargs.get('net_arch',{})[0].get('pi',None) is None:
+            self.policy_layers = [64,64]
+        else:
+            self.policy_layers = layers.get('policy', None) if layers.get('policy', None) is not None else kwargs['net_arch'][0]['pi']
+        if layers.get('polvalueicy', None) is None and kwargs.get('net_arch',{})[0].get('vf',None) is None:
+            self.value_layers = [64,64]
+        else:
+            self.value_layers = layers.get('value', None) if layers.get('value', None) is not None else kwargs['net_arch'][0]['vf']
+        self.obs_relativity = kwargs.get('obs_relativity', {})
+        self.obs_index = kwargs.get('obs_index',None)
         self.weight = {}
         self.subgoal = {}
         self.primitive_actions = {}
@@ -329,7 +337,6 @@ class FeedForwardPolicy(SACPolicy):
         self.reg_loss = None
         self.reg_weight = reg_weight
         self.entropy = 0
-
         self.activ_fn = act_fun
 
     def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
@@ -338,10 +345,60 @@ class FeedForwardPolicy(SACPolicy):
 
         non_log = False
         with tf.variable_scope(scope, reuse=reuse):
+            obs_index = list(range(self.processed_obs.shape[1].value)) if self.obs_index is None else self.obs_index
+            obs_relativity = {} if self.obs_relativity is None else self.obs_relativity
+
+            #------------- Input observation sieving layer -------------#
+            index_pair = {}
+            sieve_layer = np.zeros([self.processed_obs.shape[1].value, len(obs_index)], dtype=np.float32)
+            for i in range(len(obs_index)):
+                index_pair[obs_index[i]] = i
+                sieve_layer[obs_index[i]][i] = 1
+            sieved_obs = tf.matmul(tf.layers.flatten(self.processed_obs), sieve_layer)
+            #------------- Observation sieving layer End -------------#
+
+            if 'subtract' in obs_relativity.keys():
+                ref = obs_relativity['subtract']['ref']
+                tar = obs_relativity['subtract']['tar']
+                assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
+                ref_sieve = np.zeros([sieved_obs.shape[1].value, len(ref)], dtype=np.float32)
+                tar_sieve = np.zeros([sieved_obs.shape[1].value, len(tar)], dtype=np.float32)
+                remainder_list = list(range(sieved_obs.shape[1].value))
+                for i in range(len(ref)):
+                    remainder_list.remove(index_pair[ref[i]])
+                    remainder_list.remove(index_pair[tar[i]])
+                    ref_sieve[index_pair[ref[i]]][i] = 1
+                    tar_sieve[index_pair[tar[i]]][i] = 1
+                ref_obs = tf.matmul(sieved_obs, ref_sieve)
+                tar_obs = tf.matmul(sieved_obs, tar_sieve)
+                # ref_obs = tf.Print(ref_obs, [ref_obs,],"ref_obs: ", summarize=-1)
+                # tar_obs = tf.Print(tar_obs, [tar_obs,],"tar_obs: ", summarize=-1)
+                subs_obs = ref_obs - tar_obs
+                # subs_obs = tf.Print(subs_obs,[subs_obs,],"subtracted_obs: ", summarize=-1)
+                if not len(remainder_list) == 0:
+                    remainder = sieved_obs.shape[1].value - (len(ref) + len(tar))
+                    left_sieve = np.zeros([sieved_obs.shape[1].value, remainder], dtype=np.float32)
+                    for j in range(len(remainder_list)):
+                        left_sieve[remainder_list[j]][j] = 1
+                    rem_obs = tf.matmul(sieved_obs, left_sieve)
+                    new_obs = tf.concat([subs_obs, rem_obs], axis=-1)
+                else:
+                    new_obs = subs_obs
+                if 'leave' in obs_relativity.keys():
+                    leave = obs_relativity['leave']
+                    leave_sieve = np.zeros([sieved_obs.shape[1].value, len(leave)], dtype=np.float32)
+                    for i in range(len(leave)):
+                        leave_sieve[index_pair[leave[i]]][i] = 1
+                    leave_obs = tf.matmul(sieved_obs, leave_sieve)
+                    new_obs = tf.concat([new_obs, leave_obs], axis=-1)
+            else:
+                new_obs = sieved_obs
+                
             if self.feature_extraction == "cnn":
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
-                pi_h = tf.layers.flatten(obs)
+                # pi_h = tf.layers.flatten(obs)
+                pi_h = tf.layers.flatten(new_obs)
 
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
@@ -368,8 +425,8 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = std = tf.exp(log_std)
         # Reparameterization trick
-        mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
-        std = tf.Print(std,[std],"\tstd = ", summarize=-1)
+        # mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
+        # std = tf.Print(std,[std],"\tstd = ", summarize=-1)
         tf.summary.histogram('mu', mu_)
         tf.summary.histogram('std', std)
         tf.summary.merge_all()
@@ -448,12 +505,62 @@ class FeedForwardPolicy(SACPolicy):
                      create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
-        print(reuse)
+        
         with tf.variable_scope(scope, reuse=reuse):
+            obs_index = list(range(self.processed_obs.shape[1].value)) if self.obs_index is None else self.obs_index
+            obs_relativity = {} if self.obs_relativity is None else self.obs_relativity
+
+            #------------- Input observation sieving layer -------------#
+            index_pair = {}
+            sieve_layer = np.zeros([self.processed_obs.shape[1].value, len(obs_index)], dtype=np.float32)
+            for i in range(len(obs_index)):
+                index_pair[obs_index[i]] = i
+                sieve_layer[obs_index[i]][i] = 1
+            sieved_obs = tf.matmul(tf.layers.flatten(self.processed_obs), sieve_layer)
+            #------------- Observation sieving layer End -------------#
+
+            if 'subtract' in obs_relativity.keys():
+                ref = obs_relativity['subtract']['ref']
+                tar = obs_relativity['subtract']['tar']
+                assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
+                ref_sieve = np.zeros([sieved_obs.shape[1].value, len(ref)], dtype=np.float32)
+                tar_sieve = np.zeros([sieved_obs.shape[1].value, len(tar)], dtype=np.float32)
+                remainder_list = list(range(sieved_obs.shape[1].value))
+                for i in range(len(ref)):
+                    remainder_list.remove(index_pair[ref[i]])
+                    remainder_list.remove(index_pair[tar[i]])
+                    ref_sieve[index_pair[ref[i]]][i] = 1
+                    tar_sieve[index_pair[tar[i]]][i] = 1
+                ref_obs = tf.matmul(sieved_obs, ref_sieve)
+                tar_obs = tf.matmul(sieved_obs, tar_sieve)
+                # ref_obs = tf.Print(ref_obs, [ref_obs,],"ref_obs: ", summarize=-1)
+                # tar_obs = tf.Print(tar_obs, [tar_obs,],"tar_obs: ", summarize=-1)
+                subs_obs = ref_obs - tar_obs
+                # subs_obs = tf.Print(subs_obs,[subs_obs,],"subtracted_obs: ", summarize=-1)
+                if not len(remainder_list) == 0:
+                    remainder = sieved_obs.shape[1].value - (len(ref) + len(tar))
+                    left_sieve = np.zeros([sieved_obs.shape[1].value, remainder], dtype=np.float32)
+                    for j in range(len(remainder_list)):
+                        left_sieve[remainder_list[j]][j] = 1
+                    rem_obs = tf.matmul(sieved_obs, left_sieve)
+                    new_obs = tf.concat([subs_obs, rem_obs], axis=-1)
+                else:
+                    new_obs = subs_obs
+                if 'leave' in obs_relativity.keys():
+                    leave = obs_relativity['leave']
+                    leave_sieve = np.zeros([sieved_obs.shape[1].value, len(leave)], dtype=np.float32)
+                    for i in range(len(leave)):
+                        leave_sieve[index_pair[leave[i]]][i] = 1
+                    leave_obs = tf.matmul(sieved_obs, leave_sieve)
+                    new_obs = tf.concat([new_obs, leave_obs], axis=-1)
+            else:
+                new_obs = sieved_obs
+                
             if self.feature_extraction == "cnn":
                 critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
-                critics_h = tf.layers.flatten(obs)
+                # critics_h = tf.layers.flatten(obs)
+                critics_h = tf.layers.flatten(new_obs)
 
             if create_vf:
                 # Value function
@@ -475,6 +582,7 @@ class FeedForwardPolicy(SACPolicy):
                     qf2_h = mlp(qf_h, self.value_layers, self.activ_fn, layer_norm=self.layer_norm)
                     qf2 = tf.layers.dense(qf2_h, 1, name="qf2")
 
+                # qf1 = tf.Print(qf1,[qf1,],'qf1: ',summarize=-1)
                 self.qf1 = qf1
                 self.qf2 = qf2
 
