@@ -7,3 +7,4 @@ from stable_baselines.common.misc_util import zipsame, set_global_seeds, boolean
 from stable_baselines.common.base_class import BaseRLModel, ActorCriticRLModel, OffPolicyRLModel, SetVerbosity, \
     TensorboardWriter
 from stable_baselines.common.cmd_util import make_vec_env
+from stable_baselines.common.grad_inverter import grad_inverter

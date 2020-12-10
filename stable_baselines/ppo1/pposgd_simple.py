@@ -17,7 +17,7 @@ from stable_baselines.common.mpi_moments import mpi_moments
 from stable_baselines.common.misc_util import flatten_lists
 from stable_baselines.common.runners import traj_segment_generator
 from stable_baselines.trpo_mpi.utils import add_vtarg_and_adv
-
+from stable_baselines.common import grad_inverter
 
 
 class PPO1(ActorCriticRLModel):
@@ -50,7 +50,7 @@ class PPO1(ActorCriticRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, timesteps_per_actorbatch=256, clip_param=0.2, entcoeff=0.01,
+    def __init__(self, policy, env, gamma=0.99, timesteps_per_actorbatch=64, clip_param=0.2, entcoeff=0.01,
                  optim_epochs=4, optim_stepsize=1e-3, optim_batchsize=64, lam=0.95, adam_epsilon=1e-5,
                  schedule='linear', verbose=0, tensorboard_log=None, _init_setup_model=True,
                  policy_kwargs=None, full_tensorboard_log=False, seed=None, n_cpu_tf_sess=1):
@@ -114,6 +114,7 @@ class PPO1(ActorCriticRLModel):
                                          None, reuse=False, **self.policy_kwargs)
 
                 with tf.variable_scope("loss", reuse=False):
+                    self.grad_inverter = grad_inverter([self.action_space.high, self.action_space.low])
                     # Target advantage function (if applicable)
                     atarg = tf.placeholder(dtype=tf.float32, shape=[None])
 
@@ -301,7 +302,6 @@ class PPO1(ActorCriticRLModel):
                                 _, grad, *newlosses = self.lossandgrad(batch["ob"], batch["ob"], batch["ac"],
                                                                        batch["atarg"], batch["vtarg"], cur_lrmult,
                                                                        sess=self.sess)
-
                             self.adam.update(grad, self.optim_stepsize * cur_lrmult)
                             losses.append(newlosses)
                         logger.log(fmt_row(13, np.mean(losses, axis=0)))
