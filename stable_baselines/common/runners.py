@@ -113,8 +113,6 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
 
     while True:
         action, vpred, states, _ = policy.step(observation.reshape(-1, *observation.shape), states, done)
-        if policy.squash:
-            action = unscale_action(env.action_space, action)
         # Slight weirdness here because we need value function at time T
         # before returning segment [0, T-1] so we get the correct
         # terminal value
@@ -153,8 +151,9 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
         clipped_action = action
         # Clip the actions to avoid out of bound error
         if isinstance(env.action_space, gym.spaces.Box):
+            if policy.squash:
+                action = unscale_action(env.action_space, action)
             clipped_action = np.clip(action, env.action_space.low, env.action_space.high)
-
         if gail:
             reward = reward_giver.get_reward(observation, clipped_action[0])
             observation, true_reward, done, info = env.step(clipped_action[0])

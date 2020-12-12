@@ -19,7 +19,7 @@ from stable_baselines.common.runners import traj_segment_generator
 from stable_baselines.trpo_mpi.utils import add_vtarg_and_adv
 from stable_baselines.common import grad_inverter
 
-
+debug = True
 class PPO1(ActorCriticRLModel):
     """
     Proximal Policy Optimization algorithm (MPI version).
@@ -130,16 +130,58 @@ class PPO1(ActorCriticRLModel):
                     obs_ph = self.policy_pi.obs_ph
                     action_ph = self.policy_pi.pdtype.sample_placeholder([None])
 
+                    if debug:
+                        action_ph_val = tf.Print(action_ph, [action_ph,], '\n\n ====================Unclipped action in: \n', summarize=-1)
+                        action_ph_val = tf.Print(action_ph_val, [], '\n ======================================== \n', summarize=-1)
+
                     kloldnew = old_pi.proba_distribution.kl(self.policy_pi.proba_distribution)
+                    # old_logstd = old_pi.proba_distribution.logstd
+                    # new_logstd = self.policy_pi.proba_distribution.logstd
+                    # old_std = old_pi.proba_distribution.std
+                    # new_std = self.policy_pi.proba_distribution.std
                     ent = self.policy_pi.proba_distribution.entropy()
                     meankl = tf.reduce_mean(kloldnew)
+                    # meankl = tf.Print(meankl, [meankl,], "kl value: ")
+                    # meankl_log = tf.Print(meankl, [old_logstd,], "high kl, old logstd value: ", summarize=-1)
+                    # meankl_log = tf.Print(meankl_log, [new_logstd,], "high kl, new logstd value: ", summarize=-1)
+                    # meankl_log = tf.Print(meankl_log, [old_std,], "high kl, old std value: ", summarize=-1)
+                    # meankl_log = tf.Print(meankl_log, [new_std,], "high kl, new std value: ", summarize=-1)
+                    # meanklvalue_ = tf.where(
+                    #     tf.greater(meankl, tf.constant(1, dtype = tf.float32)),
+                    #     meankl_log, 
+                    #     meankl)
                     meanent = tf.reduce_mean(ent)
                     pol_entpen = (-self.entcoeff) * meanent
 
                     # pnew / pold
-                    ratio = tf.exp(self.policy_pi.proba_distribution.logp(action_ph) -
-                                   old_pi.proba_distribution.logp(action_ph))
+                    if debug:
+                        old_logp = old_pi.proba_distribution.logp(action_ph_val)
+                        old_mean = old_pi.proba_distribution.mode()
+                        old_std = old_pi.proba_distribution.std
+                        old_logp = tf.Print(old_logp, [old_logp,], '======  OLD logp: \n', summarize=-1)
+                        old_logp = tf.Print(old_logp, [], '\n', summarize=-1)
+                        old_logp = tf.Print(old_logp, [old_mean,], '======  OLD mean: \n', summarize=-1)
+                        old_logp = tf.Print(old_logp, [], '\n', summarize=-1)
+                        old_logp = tf.Print(old_logp, [old_std,], '======  OLD std: \n', summarize=-1)
+                        old_logp = tf.Print(old_logp, [], '\n', summarize=-1)
+                        now_logp = self.policy_pi.proba_distribution.logp(action_ph_val)
+                        now_mean = self.policy_pi.proba_distribution.mode()
+                        now_std = self.policy_pi.proba_distribution.std
+                        now_logp = tf.Print(now_logp, [now_logp,], '======  NOW logp: \n', summarize=-1)
+                        now_logp = tf.Print(now_logp, [], '\n', summarize=-1)
+                        now_logp = tf.Print(now_logp, [now_mean,], '======  NOW mean: \n', summarize=-1)
+                        now_logp = tf.Print(now_logp, [], '\n', summarize=-1)
+                        now_logp = tf.Print(now_logp, [now_std,], '======  NOW std: \n', summarize=-1)
+                        now_logp = tf.Print(now_logp, [], '\n', summarize=-1)
+                    else:
+                        now_logp = self.policy_pi.proba_distribution.logp(action_ph)
+                        old_logp = old_pi.proba_distribution.logp(action_ph)
+                    
 
+                    ratio = tf.exp(now_logp - old_logp)
+                    if debug:
+                        ratio = tf.Print(ratio, [ratio,], 'ratio: \n', summarize=-1)
+                        ratio = tf.Print(ratio, [], '\n', summarize=-1)
                     # surrogate from conservative policy iteration
                     surr1 = ratio * atarg
                     surr2 = tf.clip_by_value(ratio, 1.0 - clip_param, 1.0 + clip_param) * atarg
@@ -149,6 +191,7 @@ class PPO1(ActorCriticRLModel):
                     vf_loss = tf.reduce_mean(tf.square(self.policy_pi.value_flat - ret))
                     total_loss = pol_surr + pol_entpen + vf_loss
                     losses = [pol_surr, pol_entpen, vf_loss, meankl, meanent]
+                    # losses = [pol_surr, pol_entpen, vf_loss, meanklvalue_, meanent]
                     self.loss_names = ["pol_surr", "pol_entpen", "vf_loss", "kl", "ent"]
 
                     tf.summary.scalar('entropy_loss', pol_entpen)

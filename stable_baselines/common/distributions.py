@@ -6,7 +6,8 @@ from gym import spaces
 from stable_baselines.common.tf_layers import linear
 
 LOG_STD_MAX = 5
-LOG_STD_MIN = -5
+LOG_STD_MIN = -10
+EPS = 1e-2
 
 
 class ProbabilityDistribution(object):
@@ -243,11 +244,15 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         mean = linear(pi_latent_vector, 'pi/dense', self.size, init_scale=init_scale, init_bias=init_bias)
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
         if stv_from_obs:
-            logstd = linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias)
-            logstd = tf.clip_by_value(logstd, LOG_STD_MIN, LOG_STD_MAX)
+            print("STD from OBSERVATION")
+            # logstd = linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias)
+            std = EPS + tf.nn.sigmoid(linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias-0.5))
+            logstd = tf.log(std)
+            # logstd = tf.clip_by_value(logstd, LOG_STD_MIN, LOG_STD_MAX)
             pdparam = tf.concat([mean, logstd], axis=1)
         else:
-            logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.zeros_initializer())
+            print("STD from FIXED VALUE")
+            logstd = tf.get_variable(name='pi/dense_1', shape=[1, self.size], initializer=tf.zeros_initializer())
             pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         return self.proba_distribution_from_flat(pdparam), mean, q_values, logstd
 
@@ -447,9 +452,9 @@ class DiagGaussianProbabilityDistribution(ProbabilityDistribution):
 
     def neglogp(self, x):
         if self.squash:
-            return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
+            return 0.5 * tf.reduce_sum(tf.square((tf.atanh(x) - self.mean) / self.std), axis=-1) \
                 + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
-                + tf.reduce_sum(self.logstd, axis=-1) + tf.reduce_sum(tf.log(1-tf.tanh(x)**2+1e-6), axis=-1)
+                + tf.reduce_sum(self.logstd, axis=-1) + tf.reduce_sum(tf.log(1-x**2+1e-6), axis=-1)
         else:
             return 0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std), axis=-1) \
                 + 0.5 * np.log(2.0 * np.pi) * tf.cast(tf.shape(x)[-1], tf.float32) \
