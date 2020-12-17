@@ -728,7 +728,7 @@ class BaseRLModel(ABC):
                         print("Unloaded param: ",param_name)
                     # Keep track which variables are updated
                     not_updated_variables.remove(param_name)
-                elif 'value' in only.keys():
+                elif 'q' or 'value' in only.keys():
                     print("Only value parameters will be updated")
                     if 'values_fn' in param_name.split('/'):
                         placeholder, assign_op = self._param_load_ops[param_name]
@@ -1314,6 +1314,10 @@ class ActorCriticRLModel(BaseRLModel):
             print("The specified policy kwargs do not equal the stored policy kwargs.")
             print("Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'], kwargs['policy_kwargs']))
             input("Continue?: (press Enter or Ctrl-C)")
+            for name, elem in data['policy_kwargs'].items():
+                if kwargs['policy_kwargs'].get(name, None) is None:
+                    kwargs['policy_kwargs'][name] = elem
+            print('updated policy_kwargs: ',kwargs['policy_kwargs'])
             # raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
             #                  "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
             #                                                                   kwargs['policy_kwargs']))
