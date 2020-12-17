@@ -664,7 +664,7 @@ class BaseRLModel(ABC):
         """
         pass
 
-    def load_parameters(self, load_path_or_dict, exact_match=True):
+    def load_parameters(self, load_path_or_dict, exact_match=True, only={}):
         """
         Load model parameters from a file or a dictionary
 
@@ -716,13 +716,38 @@ class BaseRLModel(ABC):
         not_updated_variables = set(self._param_load_ops.keys())
         for param_name, param_value in params.items():
             try:
-                placeholder, assign_op = self._param_load_ops[param_name]
-                feed_dict[placeholder] = param_value
-                # Create list of tf.assign operations for sess.run
-                param_update_ops.append(assign_op)
-                # Keep track which variables are updated
-                not_updated_variables.remove(param_name)
-                print("Loaded param: ",param_name)
+                if 'policy' in only.keys():
+                    print("Only policy parameters will be updated")
+                    if 'pi' in param_name.split('/'):
+                        placeholder, assign_op = self._param_load_ops[param_name]
+                        feed_dict[placeholder] = param_value
+                        # Create list of tf.assign operations for sess.run
+                        param_update_ops.append(assign_op)
+                        print("Loaded param: ",param_name)
+                    else:
+                        print("Unloaded param: ",param_name)
+                    # Keep track which variables are updated
+                    not_updated_variables.remove(param_name)
+                elif 'value' in only.keys():
+                    print("Only value parameters will be updated")
+                    if 'values_fn' in param_name.split('/'):
+                        placeholder, assign_op = self._param_load_ops[param_name]
+                        feed_dict[placeholder] = param_value
+                        # Create list of tf.assign operations for sess.run
+                        param_update_ops.append(assign_op)
+                        print("Loaded param: ",param_name)
+                    else:
+                        print("Unloaded param: ",param_name)
+                    # Keep track which variables are updated
+                    not_updated_variables.remove(param_name)
+                else:
+                    placeholder, assign_op = self._param_load_ops[param_name]
+                    feed_dict[placeholder] = param_value
+                    # Create list of tf.assign operations for sess.run
+                    param_update_ops.append(assign_op)
+                    # Keep track which variables are updated
+                    not_updated_variables.remove(param_name)
+                    print("Loaded param: ",param_name)
             except Exception as e:
                 print("Param not in graph: ",param_name)
 
@@ -1286,9 +1311,12 @@ class ActorCriticRLModel(BaseRLModel):
         data, params = cls._load_from_file(load_path, custom_objects=custom_objects)
 
         if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
-            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
-                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
-                                                                              kwargs['policy_kwargs']))
+            print("The specified policy kwargs do not equal the stored policy kwargs.")
+            print("Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'], kwargs['policy_kwargs']))
+            input("Continue?: (press Enter or Ctrl-C)")
+            # raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
+            #                  "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
+            #                                                                   kwargs['policy_kwargs']))
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
@@ -1296,7 +1324,9 @@ class ActorCriticRLModel(BaseRLModel):
         model.set_env(env)
         model.setup_model()
 
-        model.load_parameters(params)
+        only = kwargs.get('only',{})
+        exact_match = kwargs.get('exact_match', True)
+        model.load_parameters(params, exact_match=exact_match, only=only)
 
         return model
 
