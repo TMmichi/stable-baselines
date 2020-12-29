@@ -18,6 +18,7 @@ class ReplayBuffer(object):
         self._storage = []
         self._maxsize = size
         self._next_idx = 0
+        self._initial_len = 0
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -31,6 +32,10 @@ class ReplayBuffer(object):
     def buffer_size(self) -> int:
         """float: Max capacity of the buffer"""
         return self._maxsize
+    
+    def set_storate(self, data):
+        self._storage = data
+        self._initial_len = len(data)-1
 
     def can_sample(self, n_samples: int) -> bool:
         """
@@ -66,7 +71,7 @@ class ReplayBuffer(object):
             self._storage.append(data)
         else:
             self._storage[self._next_idx] = data
-        self._next_idx = (self._next_idx + 1) % self._maxsize
+        self._next_idx = (self._next_idx + 1) % (self._maxsize - self._initial_len) + self._initial_len
 
     def extend(self, obs_t, action, reward, obs_tp1, done):
         """

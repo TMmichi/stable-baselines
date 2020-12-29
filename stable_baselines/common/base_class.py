@@ -728,7 +728,7 @@ class BaseRLModel(ABC):
                         print("Unloaded param: ",param_name)
                     # Keep track which variables are updated
                     not_updated_variables.remove(param_name)
-                elif 'q' or 'value' in only.keys():
+                elif 'q' in only.keys() or 'value' in only.keys():
                     print("Only value parameters will be updated")
                     if 'values_fn' in param_name.split('/'):
                         placeholder, assign_op = self._param_load_ops[param_name]

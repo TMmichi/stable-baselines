@@ -63,14 +63,14 @@ class SAC_MULTI(OffPolicyRLModel):
     """
 
     def __init__(self, policy, env, layers={}, gamma=0.99, learning_rate=1e-4, buffer_size=50000,
-                 learning_starts=5000, train_freq=1, batch_size=64,
+                 replay_buffer=None, learning_starts=5000, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
                  gradient_steps=1, target_entropy='auto', box_dist='gaussian', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
                  seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
 
-        super(SAC_MULTI, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
+        super(SAC_MULTI, self).__init__(policy=policy, env=env, replay_buffer=replay_buffer, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs,
                                   seed=seed, n_cpu_tf_sess=n_cpu_tf_sess, composite_primitive_name=composite_primitive_name)
 
@@ -95,7 +95,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
         self.value_fn = None
         self.graph = None
-        self.replay_buffer = None
+        self.replay_buffer = replay_buffer
         self.sess = None
         self.tensorboard_log = tensorboard_log
         self.verbose = verbose
@@ -148,7 +148,8 @@ class SAC_MULTI(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                if self.replay_buffer is None:
+                    self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects

@@ -89,6 +89,7 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
     actions = []
     observations = []
     rewards = []
+    next_observations = []
     episode_returns = np.zeros((n_episodes,))
     episode_starts = []
 
@@ -129,9 +130,11 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
             action = np.array([action[0]])
             reward = np.array([reward[0]])
             done = np.array([done[0]])
+            next_observations.append(obs[0])
 
         actions.append(action)
         rewards.append(reward)
+        next_observations.append(obs)
         episode_starts.append(done)
         reward_sum += reward
         idx += 1
@@ -147,10 +150,13 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
 
     if isinstance(env.observation_space, spaces.Box) and not record_images:
         observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
+        next_observations = np.concatenate(next_observations).reshape((-1,) + env.observation_space.shape)
     elif isinstance(env.observation_space, spaces.Discrete):
         observations = np.array(observations).reshape((-1, 1))
+        next_observations = np.array(next_observations).reshape((-1, 1))
     elif record_images:
         observations = np.array(observations)
+        next_observations = np.array(next_observations)
 
     if isinstance(env.action_space, spaces.Box):
         actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
@@ -166,6 +172,7 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
         'actions': actions,
         'obs': observations,
         'rewards': rewards,
+        'next_obs': next_observations,
         'episode_returns': episode_returns,
         'episode_starts': episode_starts
     }  # type: Dict[str, np.ndarray]
