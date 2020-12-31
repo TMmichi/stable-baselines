@@ -427,9 +427,9 @@ class FeedForwardPolicy(SACPolicy):
         # Reparameterization trick
         # mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
         # std = tf.Print(std,[std],"\tstd = ", summarize=-1)
-        tf.summary.histogram('mu', mu_)
-        tf.summary.histogram('std', std)
-        tf.summary.merge_all()
+        # tf.summary.histogram('mu', mu_)
+        # tf.summary.histogram('std', std)
+        # tf.summary.merge_all()
         
         pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
         #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
