@@ -8,7 +8,7 @@ from stable_baselines.common.vec_env import VecNormalize
 
 
 class ReplayBuffer(object):
-    def __init__(self, size: int):
+    def __init__(self, size: int, discard=True):
         """
         Implements a ring buffer (FIFO).
 
@@ -19,6 +19,7 @@ class ReplayBuffer(object):
         self._maxsize = size
         self._next_idx = 0
         self._initial_len = 0
+        self._discard = discard
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -71,7 +72,10 @@ class ReplayBuffer(object):
             self._storage.append(data)
         else:
             self._storage[self._next_idx] = data
-        self._next_idx = (self._next_idx + 1) % (self._maxsize - self._initial_len) + self._initial_len
+        if self._discard:
+            self._next_idx = (self._next_idx + 1) % self._maxsize
+        else:
+            self._next_idx = (self._next_idx + 1) % (self._maxsize - self._initial_len) + self._initial_len
 
     def extend(self, obs_t, action, reward, obs_tp1, done):
         """
