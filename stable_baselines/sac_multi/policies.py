@@ -319,7 +319,7 @@ class FeedForwardPolicy(SACPolicy):
             self.policy_layers = [64,64]
         else:
             self.policy_layers = layers.get('policy', None) if layers.get('policy', None) is not None else kwargs['net_arch'][0]['pi']
-        if layers.get('polvalueicy', None) is None and kwargs.get('net_arch',{})[0].get('vf',None) is None:
+        if layers.get('value', None) is None and kwargs.get('net_arch',{})[0].get('vf',None) is None:
             self.value_layers = [64,64]
         else:
             self.value_layers = layers.get('value', None) if layers.get('value', None) is not None else kwargs['net_arch'][0]['vf']
@@ -712,6 +712,7 @@ class FeedForwardPolicy(SACPolicy):
         # Weight setup
         for name in tails:
             if 'weight' in name.split('/'):
+                print('Graph of '+name+' initializing')
                 item = primitives[name]
                 layer_name = item['layer_name'] if item['main_tail'] else name
                 with tf.variable_scope(layer_name, reuse=reuse):
@@ -740,6 +741,7 @@ class FeedForwardPolicy(SACPolicy):
                                 self.subgoal[name] = subgoal_obs
                                 # subgoal index: in increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
+                print(name + " constructed")
                 break
         else:
             raise NotImplementedError("Weight layer not in tail")
@@ -748,20 +750,33 @@ class FeedForwardPolicy(SACPolicy):
         for name in tails:
             item = primitives[name]
             layer_name = item['layer_name'] if item['main_tail'] else name
-            if subgoal_dict.get(name, None) is not None:
-                replace_obs, replace_obs_idx = subgoal_dict[name]
-                replace_layer = np.zeros([len(replace_obs_idx), obs.shape[1].value], dtype=np.float32)
-                replace_cond = np.ones(obs.shape[1].value, dtype=np.int8)
-                for i, idx in enumerate(replace_obs_idx):
-                    replace_layer[i][idx] = 1
-                    replace_cond[idx] = 0
-                replace_obs = tf.matmul(replace_obs, replace_layer)
-                new_obs = tf.where(replace_cond, obs, replace_obs)
+            if subgoal_dict.get(name, None) is not None:\
+                # NOTE(tmmichi): absolute subgoal -> relative subgoal
+                # NOTE(tmmichi): replacing observation doesn't work (for some reason.)
+                print("subgoal dict: ", subgoal_dict[name])
+                subgoal_obs, subgoal_obs_idx = subgoal_dict[name]
+                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs: ", summarize=-1)
+                subgoal_layer = np.zeros([len(subgoal_obs_idx), obs.shape[1].value], dtype=np.float32)
+                # replace_cond = np.ones(obs.shape[1].value, dtype=np.int8)
+                for i, idx in enumerate(subgoal_obs_idx):
+                    subgoal_layer[i][idx] = 1
+                    # replace_cond[idx] = 0
+                print('subgoal_layer: ', subgoal_layer)
+                subgoal_obs = tf.matmul(subgoal_obs, subgoal_layer)
+                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs aft: ", summarize=-1)
+                # obs = tf.Print(obs, [obs, ], "obs: ", summarize=-1)
+                print('obs: ', obs)
+                print('subgoal_obs: ', subgoal_obs)
+                # new_obs = tf.where(replace_cond, obs, subgoal_obs)
+                new_obs = obs + subgoal_obs
+                new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
+                print('new_obs: ',new_obs)
             else:
                 new_obs = obs
 
             if item['tails'] == None:
                 if 'weight' not in name.split('/'):
+                    print('Graph of '+name+' initializing')
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
@@ -779,7 +794,7 @@ class FeedForwardPolicy(SACPolicy):
                         #------------- Observation sieving layer End -------------#
 
                         if 'subtract' in item['obs_relativity'].keys():
-                            print("IN SUBTRACT")
+                            print("\tIN SUBTRACT")
                             ref = item['obs_relativity']['subtract']['ref']
                             tar = item['obs_relativity']['subtract']['tar']
                             assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
@@ -827,13 +842,16 @@ class FeedForwardPolicy(SACPolicy):
                         act_index.append(item['act'][1])
 
                         self.entropy += gaussian_entropy(log_std)
-                        tf.summary.merge_all()             
+                        tf.summary.merge_all()
+                print(name + " constructed")
             else:
-                with tf.variable_scope(layer_name, reuse=reuse):
-                    _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
-                mu_array.append(mu_)
-                log_std_array.append(log_std_)
-                act_index.append(item['act'][1])
+                if 'weight' not in name.split('/'):
+                    with tf.variable_scope(layer_name, reuse=reuse):
+                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
+                    mu_array.append(mu_)
+                    log_std_array.append(log_std_)
+                    act_index.append(item['act'][1])
+                    print(name + " constructed")
         
         assert not isinstance(weight, type(None)), \
             '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
@@ -929,8 +947,10 @@ class FeedForwardPolicy(SACPolicy):
             obs = self.processed_obs
 
         for name in tails:
+            # print('name: ', name)
             item = primitives[name]
             if item['load_value']:
+                # print('in load_value')
                 layer_name = item['layer_name'] if item['main_tail'] else name
                 if item['tails'] == None:
                     with tf.variable_scope(layer_name, reuse=reuse):
@@ -978,6 +998,7 @@ class FeedForwardPolicy(SACPolicy):
                     with tf.variable_scope(layer_name, reuse=reuse):
                         self.construct_value_graph(obs, action, primitives, item['tails'], reuse, create_vf, create_qf, qf1, qf2)
             if 'weight' in name.split('/'):
+                # print('in weight')
                 composite_name = name.split('/')[0]
                 layer_name = 'train/'+composite_name if item['main_tail'] else composite_name
                 with tf.variable_scope(layer_name, reuse=reuse):
