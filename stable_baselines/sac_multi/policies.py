@@ -769,7 +769,7 @@ class FeedForwardPolicy(SACPolicy):
                 print('subgoal_obs: ', subgoal_obs)
                 # new_obs = tf.where(replace_cond, obs, subgoal_obs)
                 new_obs = obs + subgoal_obs
-                new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
+                # new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
                 print('new_obs: ',new_obs)
             else:
                 new_obs = obs
