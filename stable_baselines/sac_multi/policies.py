@@ -737,8 +737,9 @@ class FeedForwardPolicy(SACPolicy):
                         for prim_name, obs_idx in item['subgoal'].items():
                             assert prim_name in tails, "Error: name of the target primitive not in tails"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
+                                # TODO(tmmichi): restriction(bounds) on subgoal?
                                 subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation=None)
-                                self.subgoal[name] = subgoal_obs
+                                self.subgoal[prim_name] = subgoal_obs
                                 # subgoal index: in increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
                 print(name + " constructed")
@@ -769,7 +770,7 @@ class FeedForwardPolicy(SACPolicy):
                 print('subgoal_obs: ', subgoal_obs)
                 # new_obs = tf.where(replace_cond, obs, subgoal_obs)
                 new_obs = obs + subgoal_obs
-                new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
+                # new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
                 print('new_obs: ',new_obs)
             else:
                 new_obs = obs
@@ -1047,6 +1048,11 @@ class FeedForwardPolicy(SACPolicy):
         if deterministic:
             return self.sess.run(self.deterministic_policy, {self.obs_ph: obs})
         return self.sess.run(self.policy, {self.obs_ph: obs})
+    
+    def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
+        if deterministic:
+            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self.subgoal, self.weight], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})

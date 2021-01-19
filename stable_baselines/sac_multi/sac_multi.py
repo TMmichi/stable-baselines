@@ -791,10 +791,19 @@ class SAC_MULTI(OffPolicyRLModel):
                         action = scale_action(self.action_space, unscaled_action)
                     elif self.box_dist == 'beta':
                         action = scale_action(self.action_space, unscaled_action*2-1)
-                    weight = [0,0,0,0]
+                    weight = None
+                    subgoal = None
                 else:
                     if self.box_dist == 'gaussian':
-                        action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                        #NOTE: non_subgoal
+                        # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                        # NOTE: subgoal
+                        action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
+                        action = action.flatten()
+                        # print('action: ',action)
+                        # print('subgoal: ',subgoal)
+                        # print('weight: ',weight)
+
                         unscaled_action = unscale_action(self.action_space, action)
                         # weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                     elif self.box_dist == 'beta':
@@ -842,8 +851,7 @@ class SAC_MULTI(OffPolicyRLModel):
                                 
                 assert action.shape == self.env.action_space.shape
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action)
-                # new_obs, reward, done, info = self.env.step(unscaled_action, weight)
+                new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
