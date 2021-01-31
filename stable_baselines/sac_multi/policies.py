@@ -25,6 +25,7 @@ def gaussian_likelihood(input_, mu_, log_std):
     :return: (tf.Tensor)
     """
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
+    pre_sum = tf.Print(pre_sum, [pre_sum,],'summed likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 
@@ -124,9 +125,11 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     :param total_action_dimension: (int) Dimension of a total action
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
+    task_list = ['aux','reach','grasp']
     with tf.variable_scope("fuse"):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
+            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
             mu_weighted_i = mu_array[i] * normed_weight_index
@@ -137,7 +140,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             std_sum += tf.matmul(normed_weight_index, shaper)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
-        log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
+        # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
+        log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
     return pi_MCP, mu_MCP, log_std_MCP
@@ -315,11 +319,11 @@ class FeedForwardPolicy(SACPolicy):
         self.cnn_kwargs = kwargs
         self.cnn_extractor = cnn_extractor
         self.reuse = reuse
-        if layers.get('policy', None) is None and kwargs.get('net_arch',{})[0].get('pi',None) is None:
+        if layers.get('policy', None) is None and kwargs.get('net_arch',[{}])[0].get('pi',None) is None:
             self.policy_layers = [64,64]
         else:
             self.policy_layers = layers.get('policy', None) if layers.get('policy', None) is not None else kwargs['net_arch'][0]['pi']
-        if layers.get('value', None) is None and kwargs.get('net_arch',{})[0].get('vf',None) is None:
+        if layers.get('value', None) is None and kwargs.get('net_arch',[{}])[0].get('vf',None) is None:
             self.value_layers = [64,64]
         else:
             self.value_layers = layers.get('value', None) if layers.get('value', None) is not None else kwargs['net_arch'][0]['vf']
@@ -336,7 +340,6 @@ class FeedForwardPolicy(SACPolicy):
         self.primitive_qf2 = {}
         self.reg_loss = None
         self.reg_weight = reg_weight
-        self.entropy = 0
         self.activ_fn = act_fun
 
     def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
@@ -394,6 +397,7 @@ class FeedForwardPolicy(SACPolicy):
             else:
                 new_obs = sieved_obs
                 
+            # new_obs = tf.Print(new_obs, [new_obs,], 'new observation: ', summarize=-1)
             if self.feature_extraction == "cnn":
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
@@ -606,17 +610,26 @@ class FeedForwardPolicy(SACPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
 
+        # pi_MCP = tf.Print(pi_MCP, [pi_MCP,], "pi_MCP: ", summarize=-1)
+        # mu_MCP = tf.Print(mu_MCP, [mu_MCP,], "mu_MCP: ", summarize=-1)
+        # log_std_MCP = tf.Print(log_std_MCP, [log_std_MCP,], "log_std_MCP: ", summarize=-1)
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
-        #logp_pi = tf.Print(logp_pi,[logp_pi, tf.shape(logp_pi)], "logp_pi = ", summarize=-1)
+        self.entropy = gaussian_entropy(log_std_MCP)
+        # logp_pi = tf.Print(logp_pi,[logp_pi, ], "logp_pi: ", summarize=-1)
+        # logp_pi = tf.Print(logp_pi, [ ], "\n", summarize=-1)
 
         self.std = tf.exp(log_std_MCP)
-        self.policy = policy = pi_MCP
-        self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
+        logp_pi = tf.Print(logp_pi,[mu_MCP, self.std, pi_MCP, logp_pi], "mu, std, pi, logpi ", summarize=-1)
+        # self.policy = policy = pi_MCP
+        # self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
 
         # policies with squashing func at test time
-        # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
-        # self.policy = policy
-        # self.deterministic_policy = deterministic_policy
+        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        self.policy = policy
+        self.deterministic_policy = deterministic_policy
+        tf.summary.histogram('mu overall', self.deterministic_policy)
+        tf.summary.histogram('pi overall', self.policy)
+        tf.summary.histogram('std overall', self.std)
 
         return deterministic_policy, policy, logp_pi
     
@@ -730,6 +743,7 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                    # weight = tf.Print(weight, [weight,], 'weight: ', summarize=-1)
                     self.weight[name] = weight
 
                     subgoal_dict = {}
@@ -738,7 +752,8 @@ class FeedForwardPolicy(SACPolicy):
                             assert prim_name in tails, "Error: name of the target primitive not in tails"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
                                 # TODO(tmmichi): restriction(bounds) on subgoal?
-                                subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation=None)
+                                subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation='tanh') * 0.3
+                                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs,], 'subgoal: ',summarize=-1)
                                 self.subgoal[prim_name] = subgoal_obs
                                 # subgoal index: in increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
@@ -751,10 +766,10 @@ class FeedForwardPolicy(SACPolicy):
         for name in tails:
             item = primitives[name]
             layer_name = item['layer_name'] if item['main_tail'] else name
-            if subgoal_dict.get(name, None) is not None:\
+            if subgoal_dict.get(name, None) is not None:
                 # NOTE(tmmichi): absolute subgoal -> relative subgoal
                 # NOTE(tmmichi): replacing observation doesn't work (for some reason.)
-                print("subgoal dict: ", subgoal_dict[name])
+                # print("subgoal dict: ", subgoal_dict[name])
                 subgoal_obs, subgoal_obs_idx = subgoal_dict[name]
                 # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs: ", summarize=-1)
                 subgoal_layer = np.zeros([len(subgoal_obs_idx), obs.shape[1].value], dtype=np.float32)
@@ -762,22 +777,19 @@ class FeedForwardPolicy(SACPolicy):
                 for i, idx in enumerate(subgoal_obs_idx):
                     subgoal_layer[i][idx] = 1
                     # replace_cond[idx] = 0
-                print('subgoal_layer: ', subgoal_layer)
                 subgoal_obs = tf.matmul(subgoal_obs, subgoal_layer)
                 # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs aft: ", summarize=-1)
                 # obs = tf.Print(obs, [obs, ], "obs: ", summarize=-1)
-                print('obs: ', obs)
-                print('subgoal_obs: ', subgoal_obs)
                 # new_obs = tf.where(replace_cond, obs, subgoal_obs)
                 new_obs = obs + subgoal_obs
                 # new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
-                print('new_obs: ',new_obs)
+                # print('new_obs: ',new_obs)
             else:
                 new_obs = obs
 
             if item['tails'] == None:
                 if 'weight' not in name.split('/'):
-                    print('Graph of '+name+' initializing')
+                    print('\tGraph of '+name+' initializing')
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
@@ -825,7 +837,7 @@ class FeedForwardPolicy(SACPolicy):
                         # if aux, then the produced action becomes scaled
                         mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)
                         
-                        tf.summary.histogram('mu', mu_)
+                        # tf.summary.histogram('mu', mu_)
                         mu_array.append(mu_)
                         self.primitive_actions[name] = mu_
 
@@ -836,15 +848,15 @@ class FeedForwardPolicy(SACPolicy):
                             log_std = tf.log(std)
 
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
-                        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        tf.summary.histogram('std', tf.exp(log_std))
+                        # log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                        # tf.summary.histogram('std', tf.exp(log_std))
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
 
-                        self.entropy += gaussian_entropy(log_std)
+                        # self.entropy += gaussian_entropy(log_std)
                         tf.summary.merge_all()
-                print(name + " constructed")
+                print('\t' + name + " constructed")
             else:
                 if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
@@ -852,7 +864,7 @@ class FeedForwardPolicy(SACPolicy):
                     mu_array.append(mu_)
                     log_std_array.append(log_std_)
                     act_index.append(item['act'][1])
-                    print(name + " constructed")
+                    print('\t' + name + " constructed")
         
         assert not isinstance(weight, type(None)), \
             '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)

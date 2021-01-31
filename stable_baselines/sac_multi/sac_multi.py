@@ -143,6 +143,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
     def setup_model(self):
         print("Setting up model")
+        print(self.policy_kwargs)
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -396,7 +397,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 for var in variable_list:
                     if 'values_fn' not in var.name:
                         self.get_variable_op[var.name] = var
-                print(self.get_variable_op)
+                # print(self.get_variable_op)
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -563,6 +564,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         if self.grad_logger:
                             self.grad_logger_op = {}
                             for index, grad in enumerate(grads):
+                                # self.grad_logger_op[grad[0].name] = grad[0]
                                 self.grad_logger_op[grad[1].name] = grad[1]
                         policy_train_op = policy_optimizer.apply_gradients(grads)
 
@@ -571,12 +573,11 @@ class SAC_MULTI(OffPolicyRLModel):
                         values_params = tf_util.get_trainable_vars('model/values_fn/\w*/train')
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
-                        # print("Source optimizee: ")
+                        # print("Value source optimizee: ")
                         # for var in source_params_trainable:
-                        #     tf.summary.histogram(var.name, var)
                         #     print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
-                        # print("Target optimizee: ")
+                        # print("Value target optimizee: ")
                         # for var in target_params_trainable:
                         #     print("\t",var)
 
@@ -618,7 +619,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('mean: qf1_pi', qf1_pi_mean)
+                        # tf.summary.scalar('mean: qf1_pi', qf1_pi_mean)
                         tf.summary.scalar('mean: logp_pi', logp_pi_mean)
 
                         if ent_coef_loss is not None:
@@ -665,8 +666,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
                 self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
                 self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
-                for name,item in logger.items():
-                    print(name)
+                for name, item in logger.items():
                     self.file_logger.writelines(str(name)+'\n')
                     self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
                     self.file_logger.writelines('\n')
@@ -797,13 +797,11 @@ class SAC_MULTI(OffPolicyRLModel):
                     if self.box_dist == 'gaussian':
                         #NOTE: non_subgoal
                         # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                        # weight = subgoal = None
                         # NOTE: subgoal
                         action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
-                        action = action.flatten()
-                        # print('action: ',action)
-                        # print('subgoal: ',subgoal)
-                        # print('weight: ',weight)
 
+                        action = action.flatten()
                         unscaled_action = unscale_action(self.action_space, action)
                         # weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
                     elif self.box_dist == 'beta':
@@ -824,13 +822,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # inferred actions need to be transformed to environment action_space before stepping
                     unscaled_action = unscale_action(self.action_space, action)
-                    if self.box_dist == 'gaussian':
-                        if step % 200 == 0:
-                            pass
-                            # print('action: {0: 2.3f}'.format(unscaled_action[0]))
-                            # print('action: ', unscaled_action)
-                            # print(weight)
-                    elif self.box_dist == 'beta':
+                    if self.box_dist == 'beta':
                         if step % 200 == 0:
                             try:
                                 prim_actions = self.policy_tf.get_primitive_action(obs[None])
@@ -990,6 +982,20 @@ class SAC_MULTI(OffPolicyRLModel):
             actions = actions[0]
 
         return actions, None
+    
+    def predict_subgoal(self, observation, deterministic=True):
+        observation = np.array(observation)
+        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
+
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        actions, subgoal, weight = self.policy_tf.subgoal_step(observation, deterministic=deterministic)
+        actions = unscale_action(self.action_space, actions)
+
+        if not vectorized_env:
+            actions = actions[0]
+        
+        return actions, subgoal, weight
+
     
     def get_weight(self, observation):
         observation = np.array(observation)

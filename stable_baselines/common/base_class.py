@@ -292,7 +292,6 @@ class BaseRLModel(ABC):
             obs_index.sort()
             obs_space = gym.spaces.Box(obs_range_min, obs_range_max, dtype=np.float32)
             obs = (obs_space, obs_index)
-            print('obs: ',obs)
 
             act_dimension = len(act_index)
             if isinstance(act_range, dict):
