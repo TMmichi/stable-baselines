@@ -142,7 +142,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
-        pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
+        # pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
+        pi_MCP = mu_MCP
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -610,16 +611,12 @@ class FeedForwardPolicy(SACPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
 
-        # pi_MCP = tf.Print(pi_MCP, [pi_MCP,], "pi_MCP: ", summarize=-1)
-        # mu_MCP = tf.Print(mu_MCP, [mu_MCP,], "mu_MCP: ", summarize=-1)
-        # log_std_MCP = tf.Print(log_std_MCP, [log_std_MCP,], "log_std_MCP: ", summarize=-1)
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         self.entropy = gaussian_entropy(log_std_MCP)
-        # logp_pi = tf.Print(logp_pi,[logp_pi, ], "logp_pi: ", summarize=-1)
-        # logp_pi = tf.Print(logp_pi, [ ], "\n", summarize=-1)
 
         self.std = tf.exp(log_std_MCP)
-        logp_pi = tf.Print(logp_pi,[mu_MCP, self.std, pi_MCP, logp_pi], "mu, std, pi, logpi ", summarize=-1)
+        weight_val = [self.weight[name] for name in self.weight.keys()]
+        logp_pi = tf.Print(logp_pi,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         # self.policy = policy = pi_MCP
         # self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
 
@@ -743,7 +740,6 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
-                    # weight = tf.Print(weight, [weight,], 'weight: ', summarize=-1)
                     self.weight[name] = weight
 
                     subgoal_dict = {}
@@ -751,7 +747,7 @@ class FeedForwardPolicy(SACPolicy):
                         for prim_name, obs_idx in item['subgoal'].items():
                             assert prim_name in tails, "Error: name of the target primitive not in tails"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
-                                # TODO(tmmichi): restriction(bounds) on subgoal?
+                                # NOTE(tmmichi): restriction(bounds) on subgoal.
                                 subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation='tanh') * 0.3
                                 # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs,], 'subgoal: ',summarize=-1)
                                 self.subgoal[prim_name] = subgoal_obs
@@ -835,11 +831,7 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         # if aux, then the produced action becomes scaled
-                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)
-                        
-                        # tf.summary.histogram('mu', mu_)
-                        mu_array.append(mu_)
-                        self.primitive_actions[name] = mu_
+                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)                        
 
                         if not non_log:
                             log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
@@ -847,9 +839,11 @@ class FeedForwardPolicy(SACPolicy):
                             std = tf.layers.dense(pi_h, len(item['act'][1]), activation='relu') + EPS
                             log_std = tf.log(std)
 
+                        mu_ = tf.Print(mu_, [mu_, std], name+' mu, std: ', summarize=-1)
+                        mu_array.append(mu_)
+                        self.primitive_actions[name] = mu_
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                         # log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        # tf.summary.histogram('std', tf.exp(log_std))
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
