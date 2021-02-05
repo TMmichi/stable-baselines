@@ -25,7 +25,7 @@ def gaussian_likelihood(input_, mu_, log_std):
     :return: (tf.Tensor)
     """
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    pre_sum = tf.Print(pre_sum, [pre_sum,],'summed likelihood: ', summarize=-1)
+    # pre_sum = tf.Print(pre_sum, [pre_sum,],'summed likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 
@@ -132,6 +132,7 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
+            normed_weight_index = tf.Print(normed_weight_index, [normed_weight_index,], 'coef: ', summarize=-1)
             mu_weighted_i = mu_array[i] * normed_weight_index
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
             for j, index in enumerate(act_index[i]):
@@ -142,8 +143,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
-        # pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
-        pi_MCP = mu_MCP
+        pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
+        # pi_MCP = mu_MCP
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -616,12 +617,12 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = tf.exp(log_std_MCP)
         weight_val = [self.weight[name] for name in self.weight.keys()]
-        logp_pi = tf.Print(logp_pi,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         # self.policy = policy = pi_MCP
         # self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
 
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
         tf.summary.histogram('mu overall', self.deterministic_policy)
@@ -839,11 +840,11 @@ class FeedForwardPolicy(SACPolicy):
                             std = tf.layers.dense(pi_h, len(item['act'][1]), activation='relu') + EPS
                             log_std = tf.log(std)
 
-                        mu_ = tf.Print(mu_, [mu_, std], name+' mu, std: ', summarize=-1)
                         mu_array.append(mu_)
                         self.primitive_actions[name] = mu_
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
-                        # log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                        log_std = tf.Print(log_std, [mu_, tf.exp(log_std)], name+' mu, std: ', summarize=-1)
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
