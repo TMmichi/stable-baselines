@@ -132,7 +132,7 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
-            normed_weight_index = tf.Print(normed_weight_index, [normed_weight_index,], 'coef: ', summarize=-1)
+            # normed_weight_index = tf.Print(normed_weight_index, [normed_weight_index,], 'coef: ', summarize=-1)
             mu_weighted_i = mu_array[i] * normed_weight_index
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
             for j, index in enumerate(act_index[i]):
@@ -622,7 +622,7 @@ class FeedForwardPolicy(SACPolicy):
 
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
-        policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
+        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
         tf.summary.histogram('mu overall', self.deterministic_policy)
@@ -844,7 +844,7 @@ class FeedForwardPolicy(SACPolicy):
                         self.primitive_actions[name] = mu_
                         # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        log_std = tf.Print(log_std, [mu_, tf.exp(log_std)], name+' mu, std: ', summarize=-1)
+                        # log_std = tf.Print(log_std, [mu_, tf.exp(log_std)], name+' mu, std: ', summarize=-1)
                         log_std_array.append(log_std)
                         self.primitive_log_std[name] = log_std
                         act_index.append(item['act'][1])
