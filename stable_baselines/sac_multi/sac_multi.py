@@ -125,8 +125,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
-        self.NGSAC = False
-        self.grad_logger = False
+        self.grad_logger = True
 
         if _init_setup_model:
             self.setup_model()
@@ -135,10 +134,7 @@ class SAC_MULTI(OffPolicyRLModel):
         policy = self.policy_tf
         print("in pretrain placeholders")
         # Rescale
-        if self.box_dist == 'gaussian':
-            deterministic_action = unscale_action(self.action_space, self.deterministic_action)
-        elif self.box_dist == 'beta':
-            deterministic_action = unscale_action(self.action_space, self.deterministic_action*2-1)
+        deterministic_action = unscale_action(self.action_space, self.deterministic_action)
         return policy.obs_ph, self.actions_ph, deterministic_action
 
     def setup_model(self):
@@ -182,14 +178,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
-                    if self.box_dist == 'gaussian':
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
-                    elif self.box_dist == 'beta':
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_beta_actor(self.processed_obs_ph)
-                        with tf.variable_scope("old_policy", reuse=False):
-                            _, _, _ = old_policy_tf.make_beta_actor(self.processed_obs_ph)
-                        with tf.variable_scope("comp_policy", reuse=False):
-                            _, _, _ = comp_policy_tf.make_beta_actor(self.processed_obs_ph)
+                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -285,20 +274,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     #policy_var_list = policy_var_new + policy_var_old
                     policy_var_list = policy_var_new
 
-                    if self.NGSAC:
-                        flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
-                        shapes = [var.get_shape().as_list() for var in policy_var_list]
-                        print('shapes: ',shapes)
-                        start = 0
-                        tangents = []
-                        for shape in shapes:
-                            var_size = tf_util.intprod(shape)
-                            tangents.append(tf.reshape(flat_tangent[start: start + var_size], shape))
-                            start += var_size
-                        
-                        kloldnew = old_policy_tf.kl(self.policy_tf)
-                        klgrads = tf.gradients(kloldnew, policy_var_list)
-                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                     if self.grad_logger:
                         self.grad_logger_op = {}
                         for index, grad in enumerate(grads):
@@ -306,29 +281,7 @@ class SAC_MULTI(OffPolicyRLModel):
                             self.grad_logger_op[grad[0].name] = grad[0]
                             self.grad_logger_op[grad[1].name] = grad[1]
 
-                    if self.NGSAC:
-                        new_grads = []
-                        for v, grad in zip(policy_var_list, grads):
-                            grad0 = grad[0] if grad[0] is not None else tf.zeros_like(v)
-                            grad1 = grad[1] if grad[1] is not None else tf.zeros_like(v)
-                            new_grads.append((grad0,grad1))
-                        self.grads_op = new_grads
-
-                        gvp = tf.add_n([tf.reduce_sum(grad * tangent) for (grad, tangent) in zipsame(klgrads, tangents)])
-                        fvps = tf_util.flatgrad(gvp, policy_var_list)
-                        self.compute_fvp = tf_util.function([flat_tangent, self.observations_ph, self.actions_ph, self.next_observations_ph, self.rewards_ph], fvps)
-                        self.step_dirs_ph = tf.placeholder(dtype=tf.float32, shape=[None])
-                        step_dir_array = []
-                        start = 0
-                        for shape, grad in zip(shapes, new_grads):
-                            var_size = tf_util.intprod(shape)
-                            step_dir_array.append((tf.reshape(self.step_dirs_ph[start: start + var_size], shape), grad[1]))
-                            start += var_size
-
-                    if self.NGSAC:
-                        self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(step_dir_array)
-                    else:
-                        self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(grads)
+                    self.policy_train_op = policy_train_op = policy_optimizer.apply_gradients(grads)
 
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -441,20 +394,15 @@ class SAC_MULTI(OffPolicyRLModel):
                 loaded = True if 'loaded' in primitives.keys() else False
                 if loaded:
                     with tf.variable_scope("model", reuse=False):
-                        if self.box_dist == 'gaussian':
-                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
-                        elif self.box_dist == 'beta':
-                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_beta_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
                         # first return value corresponds to deterministic actions
                         # policy_out corresponds to stochastic actions, used for training
                         # logp_pi is the log probability of actions taken by the policy
-                        if self.box_dist == 'gaussian':
-                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
-                        elif self.box_dist == 'beta':
-                            self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_beta_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
+            
                         # Monitor the entropy of the policy,
                         # this is not used for training
                         self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -675,29 +623,11 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.file_mean_logger.writelines('\n')
                 self.file_logger.writelines('\n')
                 self.file_mean_logger.writelines('\n')
-            if self.NGSAC:
-                def fisher_vector_product(vec):
-                    return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
-                grads = np.array(self.sess.run(self.grads_op, feed_dict))[:,0]
-                grads = np.concatenate([np.reshape(grad, np.prod(grad.shape)) for grad in grads],axis=0)
-                step_dir = conjugate_gradient(fisher_vector_product, grads)
-                assert np.isfinite(step_dir).all()
-                print("{0: 5.5f}".format(np.mean(grads - step_dir)/learning_rate))
-                feed_dict[self.step_dirs_ph] = step_dir
 
             out = self.sess.run([self.summary] + self.step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)
         else:
-            if self.NGSAC:
-                def fisher_vector_product(vec):
-                    return self.compute_fvp(vec, batch_obs, batch_actions, batch_next_obs, batch_rewards.reshape(self.batch_size, -1), sess=self.sess)
-                grads = np.array(self.sess.run(self.grads_op, feed_dict))[:,0]
-                grads = np.concatenate([np.reshape(grad, np.prod(grad.shape)) for grad in grads],axis=0)
-                step_dir = conjugate_gradient(fisher_vector_product, grads)
-                assert np.isfinite(step_dir).all()
-                print("{0: 5.5f}".format(np.mean(grads - step_dir)/learning_rate))
-                feed_dict[self.step_dirs_ph] = step_dir
             if self.grad_logger:
                 logger = self.sess.run(self.grad_logger_op, feed_dict)
                 variables = self.sess.run(self.get_variable_op, feed_dict)
@@ -787,34 +717,19 @@ class SAC_MULTI(OffPolicyRLModel):
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
-                    if self.box_dist == 'gaussian':
-                        action = scale_action(self.action_space, unscaled_action)
-                    elif self.box_dist == 'beta':
-                        action = scale_action(self.action_space, unscaled_action*2-1)
+                    action = scale_action(self.action_space, unscaled_action)
                     weight = None
                     subgoal = None
                 else:
-                    if self.box_dist == 'gaussian':
-                        #NOTE: non_subgoal
-                        # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                        # weight = subgoal = None
-                        # NOTE: subgoal
-                        action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
+                    #NOTE: non_subgoal
+                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    # weight = subgoal = None
+                    # NOTE: subgoal
+                    action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
 
-                        action = action.flatten()
-                        unscaled_action = unscale_action(self.action_space, action)
-                        # weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
-                    elif self.box_dist == 'beta':
-                        action, mode, alpha, beta = self.policy_tf.proba_step(obs[None], beta=True)
-                        #weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
-                        action = action.flatten() * 2 - 1
-                        if np.any(np.isnan(mode)):
-                            nan_num += 1
-                            print(data_past)
-                            action[np.isnan(action)] = 0
-                            if nan_num > 100:
-                                quit()
-                        data_past = [action, mode, alpha, beta] 
+                    action = action.flatten()
+                    unscaled_action = unscale_action(self.action_space, action)
+                    # weight = self.policy_tf.get_weight(obs[None])['level1_PoseControl/weight'][0]
 
                     # Add noise to the action (improve exploration,
                     # not needed in general)
@@ -822,25 +737,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # inferred actions need to be transformed to environment action_space before stepping
                     unscaled_action = unscale_action(self.action_space, action)
-                    if self.box_dist == 'beta':
-                        if step % 200 == 0:
-                            try:
-                                prim_actions = self.policy_tf.get_primitive_action(obs[None])
-                                #weights = self.policy_tf.get_weight(obs[None])
-                                alphas, betas = self.policy_tf.get_primitive_param(obs[None])
-                            except Exception:
-                                pass
-                            if len(unscaled_action) == 1:
-                                #print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]), ', mu: {0:2.3f}'.format(mu[0][0]), ', std: {0:2.5f}'.format(std[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
-                                print('action: {0: 2.3f}'.format(unscaled_action[0]),', mode: {0:2.3f}'.format(mode[0][0]),', alpha: {0:2.3f}'.format(alpha[0][0]), ', beta: {0:2.3f}'.format(beta[0][0]))
-                            else:
-                                print(prim_actions)
-                                print(alphas)
-                                print(betas)
-                                #print(weights['level1_PoseControl/weight'])
-                                for i in range(len(unscaled_action)):
-                                    print(str(i)+' action: {0: 2.3f}'.format(unscaled_action[i]),', mode: {0:2.3f}'.format(mode[0][i]), ', mu: {0:2.3f}'.format(mu[0][i]), ', std: {0:2.5f}'.format(std[0][i]),', alpha: {0:2.7f}'.format(alpha[0][i]), ', beta: {0:2.7f}'.format(beta[0][i]))
-                                
+
                 assert action.shape == self.env.action_space.shape
                 
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal)
@@ -973,11 +870,7 @@ class SAC_MULTI(OffPolicyRLModel):
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions = self.policy_tf.step(observation, deterministic=deterministic)
         actions = actions.reshape((-1,) + self.action_space.shape)  # reshape to the correct action shape
-        if self.box_dist == 'gaussian':
-            actions = unscale_action(self.action_space, actions) # scale the output for the prediction
-        elif self.box_dist =='beta':
-            actions = unscale_action(self.action_space, actions*2-1) # scale the output for the prediction
-
+        actions = unscale_action(self.action_space, actions) # scale the output for the prediction
         if not vectorized_env:
             actions = actions[0]
 
