@@ -823,7 +823,7 @@ class BaseRLModel(ABC):
         
         model.set_env(env)
         try:
-            model.setup_custom_model(model.primitives)
+            model.setup_HPC_model(model.primitives)
         except Exception as e:
             print(e)
             raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.\033[0m")
@@ -1256,10 +1256,10 @@ class ActorCriticRLModel(BaseRLModel):
                 std = np.exp(logstd)
 
                 n_elts = np.prod(mean.shape[1:])  # first dimension is batch size
-                log_normalizer = n_elts/2 * np.log(2 * np.pi) + 1/2 * np.sum(logstd, axis=1)
+                log_normalizer = n_elts/2 * np.log(2 * np.pi) + np.sum(logstd, axis=1)
 
                 # Diagonal Gaussian action probability, for every action
-                logprob = -np.sum(np.square(actions - mean) / (2 * std), axis=1) - log_normalizer
+                logprob = -np.sum(np.square(actions - mean) / (2 * np.square(std)), axis=1) - log_normalizer
 
             else:
                 warnings.warn("Warning: action_probability not implemented for {} actions space. Returning None."

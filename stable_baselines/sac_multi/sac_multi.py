@@ -125,7 +125,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
-        self.grad_logger = True
+        self.grad_logger = False
 
         if _init_setup_model:
             self.setup_model()
@@ -151,10 +151,6 @@ class SAC_MULTI(OffPolicyRLModel):
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
-                                                **self.policy_kwargs)
-                    old_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
-                                                **self.policy_kwargs)
-                    comp_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                 **self.policy_kwargs)
 
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
@@ -268,12 +264,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-6)
                     #policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
 
-                    policy_var_new = tf_util.get_trainable_vars('model/pi')
-                    policy_var_old = tf_util.get_trainable_vars('model/old_policy/pi')
-                    policy_var_comp = tf_util.get_trainable_vars('model/comp_policy/pi')
-                    #policy_var_list = policy_var_new + policy_var_old
-                    policy_var_list = policy_var_new
+                    policy_var_list = tf_util.get_trainable_vars('model/pi')
 
+                    grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                     if self.grad_logger:
                         self.grad_logger_op = {}
                         for index, grad in enumerate(grads):
@@ -301,15 +294,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         for target, source in zip(target_params, source_params)
                     ]
 
-                    self.assign_old_new_op = [
-                        tf.assign(var_old, var_new)
-                        for var_old, var_new in zip(policy_var_old, policy_var_new)
-                    ]
-
-                    self.assign_comp_new_op = [
-                        tf.assign(var_comp, var_new)
-                        for var_comp, var_new in zip(policy_var_comp, policy_var_new)
-                    ]
 
                     # Control flow is used because sess.run otherwise evaluates in nondeterministic order
                     # and we first need to compute the policy action before computing q values losses
@@ -359,7 +343,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def setup_custom_model(self, primitives, load_value=True):
+    def setup_HPC_model(self, primitives, load_value=True):
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -368,7 +352,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
-                    # Create custom policy and target TF objects
+                    # Create HPC policy and target TF objects
                     self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
                                                 **self.policy_kwargs)
                     self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, layers=self.layers,
@@ -394,23 +378,23 @@ class SAC_MULTI(OffPolicyRLModel):
                 loaded = True if 'loaded' in primitives.keys() else False
                 if loaded:
                     with tf.variable_scope("model", reuse=False):
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_HPC_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
                 else:
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
                         # first return value corresponds to deterministic actions
                         # policy_out corresponds to stochastic actions, used for training
                         # logp_pi is the log probability of actions taken by the policy
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_custom_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_HPC_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0])
             
                         # Monitor the entropy of the policy,
                         # this is not used for training
                         self.entropy = tf.reduce_mean(self.policy_tf.entropy)
                         
                         #  Use two Q-functions to improve performance by reducing overestimation bias.
-                        qf1, qf2, value_fn = self.policy_tf.make_custom_critics(self.processed_obs_ph, self.actions_ph, primitives, self.tails,
+                        qf1, qf2, value_fn = self.policy_tf.make_HPC_critics(self.processed_obs_ph, self.actions_ph, primitives, self.tails,
                                                                         create_qf=True, create_vf=True)
-                        qf1_pi, qf2_pi, _ = self.policy_tf.make_custom_critics(self.processed_obs_ph, policy_out, primitives, self.tails,
+                        qf1_pi, qf2_pi, _ = self.policy_tf.make_HPC_critics(self.processed_obs_ph, policy_out, primitives, self.tails,
                                                                         create_qf=True, create_vf=False,
                                                                         reuse=True)
 
@@ -444,7 +428,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     with tf.variable_scope("target", reuse=False):
                         # Create the value network
-                        _, _, value_target = self.target_policy.make_custom_critics(self.processed_next_obs_ph, None, primitives, self.tails,
+                        _, _, value_target = self.target_policy.make_HPC_critics(self.processed_next_obs_ph, None, primitives, self.tails,
                                                                             create_qf=False, create_vf=True)
                         self.value_target = value_target
 
@@ -470,18 +454,12 @@ class SAC_MULTI(OffPolicyRLModel):
                             ent_coef_loss = -tf.reduce_mean(
                                 self.log_ent_coef * tf.stop_gradient(logp_pi + self.target_entropy))
                             entropy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+
                         # Compute the policy loss
                         # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                         qf1_pi = tf.reshape(qf1_pi,[-1])
                         logp_pi_mean = tf.reduce_mean(logp_pi)
-                        qf1_pi_mean = tf.reduce_mean(qf1_pi)
-                        
                         policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
-
-                        # NOTE: in the original implementation, they have an additional
-                        # regularization loss for the Gaussian parameters
-                        # this is not used for now
-                        # policy_loss = (policy_kl_loss + policy_regularization_loss)
                         policy_loss = policy_kl_loss
 
                         # Target for value fn regression
@@ -489,14 +467,12 @@ class SAC_MULTI(OffPolicyRLModel):
                         # reduce overestimation bias from function approximation error.
                         v_backup = tf.stop_gradient(min_qf_pi - self.ent_coef * logp_pi)
                         value_loss = 0.5 * tf.reduce_mean((value_fn - v_backup) ** 2)
-
                         values_losses = qf1_loss + qf2_loss + value_loss
 
                         # Policy train op
                         # (has to be separate from value train op, because min_qf_pi appears in policy_loss)
                         policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                         # policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
-                        # NOTE: params of pretrained networks should not be fine-tuned to avoid forgetting
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
                         # print("Policy optimizee: ")
                         # for var in policy_var_list:
@@ -567,8 +543,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.summary.scalar('qf2_loss', qf2_loss)
                         tf.summary.scalar('value_loss', value_loss)
                         tf.summary.scalar('entropy', self.entropy)
-                        # tf.summary.scalar('mean: qf1_pi', qf1_pi_mean)
-                        tf.summary.scalar('mean: logp_pi', logp_pi_mean)
+                        tf.summary.scalar('mean/logp_pi', logp_pi_mean)
 
                         if ent_coef_loss is not None:
                             tf.summary.scalar('ent_coef_loss', ent_coef_loss)
@@ -590,9 +565,6 @@ class SAC_MULTI(OffPolicyRLModel):
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, step, writer, learning_rate):
-        # Assign old policy to the new one
-        # self.sess.run(self.assign_old_new_op)
-
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
@@ -705,8 +677,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
-            nan_num = 0
-            data_past = []
 
             for step in range(total_timesteps - loaded_step_num):
                 # Before training starts, randomly sample actions
@@ -714,6 +684,13 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Afterwards, use the learned policy
                 # if random_exploration is set to 0 (normal setting)
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
+                    # NOTE:
+                    # -> 처음 exploration 하는 동안에 action space에서 sample하지 말고
+                    #     1. weight를 sample하는 방향
+                    # -> reward structure에 rulebased.
+                    # -> reward에 constraint. preference 반영.. <- debugging 용도로 사용. reward function에서 reaching penalty.
+
+
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()

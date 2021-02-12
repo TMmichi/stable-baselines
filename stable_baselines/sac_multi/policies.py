@@ -25,7 +25,8 @@ def gaussian_likelihood(input_, mu_, log_std):
     :return: (tf.Tensor)
     """
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    pre_sum = tf.Print(pre_sum, [pre_sum,],'summed likelihood: ', summarize=-1)
+    pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
+    pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 
@@ -78,14 +79,15 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     :param total_action_dimension: (int) Dimension of a total action
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
-    task_list = ['aux','reach','grasp']
+    # task_list = ['aux','reach','grasp']
+    task_list = ['reach','grasp']
     with tf.variable_scope("fuse"):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
-            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
-            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
+            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
+            weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
-            # normed_weight_index = tf.Print(normed_weight_index, [normed_weight_index,], 'coef: ', summarize=-1)
             mu_weighted_i = mu_array[i] * normed_weight_index
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
             for j, index in enumerate(act_index[i]):
@@ -155,7 +157,7 @@ class SACPolicy(BasePolicy):
         raise NotImplementedError
 
     @abstractmethod
-    def make_custom_actor(self, primitives, obs=None, reuse=False, scope="pi"):
+    def make_HPC_actor(self, primitives, obs=None, reuse=False, scope="pi"):
         """
         Creates an custom actor object
 
@@ -168,7 +170,7 @@ class SACPolicy(BasePolicy):
         raise NotImplementedError
 
     @abstractmethod
-    def make_custom_critics(self, primitives, obs=None, action=None, separate_value=True, reuse=False,
+    def make_HPC_critics(self, primitives, obs=None, action=None, separate_value=True, reuse=False,
                     scope="values_fn", create_vf=True, create_qf=True):
         """
         Creates the two Q-Values approximator along with the custom Value function
@@ -455,9 +457,9 @@ class FeedForwardPolicy(SACPolicy):
 
         return self.qf1, self.qf2, self.value_fn
 
-    def make_custom_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
+    def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
         """
-        Creates a custom actor object
+        Creates a HPC actor object
 
         :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
         :param primitives: (dict) Obs/act information of primitives
@@ -475,14 +477,15 @@ class FeedForwardPolicy(SACPolicy):
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         self.entropy = gaussian_entropy(log_std_MCP)
-
         self.std = tf.exp(log_std_MCP)
-        weight_val = [self.weight[name] for name in self.weight.keys()]
+        
+        # policies without squashing func
         # self.policy = policy = pi_MCP
         # self.deterministic_policy = deterministic_policy = self.act_mu = mu_MCP
 
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        weight_val = [self.weight[name] for name in self.weight.keys()]
         policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
@@ -492,10 +495,10 @@ class FeedForwardPolicy(SACPolicy):
 
         return deterministic_policy, policy, logp_pi
  
-    def make_custom_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
+    def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
                     create_vf=True, create_qf=True):
         """
-        Creates the two Q-Values approximator along with the custom Value function
+        Creates the two Q-Values approximator along with the HPC Value function
 
         :param primitives: (dict) Obs/act information of primitives
         :param obs: (TensorFlow Tensor) The observation placeholder (can be None for default placeholder)
@@ -537,12 +540,12 @@ class FeedForwardPolicy(SACPolicy):
         act_index = []
         weight = None
 
-        # Weight setup
+        # Meta-controller Initialization
         for name in tails:
             if 'weight' in name.split('/'):
                 print('Graph of '+name+' initializing')
-                item = primitives[name]
-                layer_name = item['layer_name'] if item['main_tail'] else name
+                prim_dict = primitives[name]
+                layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
                 with tf.variable_scope(layer_name, reuse=reuse):
                     if self.feature_extraction == "cnn":
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -551,59 +554,50 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = tf.layers.flatten(obs)
                     
                     #------------- Input observation sieving layer -------------#
-                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                    for i in range(len(item['obs'][1])):
-                        sieve_layer[item['obs'][1][i]][i] = 1
+                    sieve_layer = np.zeros([obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)
+                    for i in range(len(prim_dict['obs'][1])):
+                        sieve_layer[prim_dict['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
-                    pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
-                    weight = tf.layers.dense(pi_h, len(item['act'][1]), activation='softmax')
+                    pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+                    weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
                     self.weight[name] = weight
-
+                    
                     subgoal_dict = {}
-                    if item.get('subgoal', None) is not None:
-                        for prim_name, obs_idx in item['subgoal'].items():
-                            assert prim_name in tails, "Error: name of the target primitive not in tails"
+                    if prim_dict.get('subgoal', None) is not None:
+                        
+                        for prim_name, obs_idx in prim_dict['subgoal'].items():
+                            assert prim_name in tails, "\n\t\033[91m[ERROR]: name of the target primitive not in tails or does not match\033[0m"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
                                 # NOTE(tmmichi): restriction(bounds) on subgoal.
                                 subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation='tanh') * 0.3
-                                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs,], 'subgoal: ',summarize=-1)
                                 self.subgoal[prim_name] = subgoal_obs
-                                # subgoal index: in increasing order of observation
+                                # subgoal index: in an increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
-                print(name + " constructed")
+                    print(name + " constructed")
                 break
         else:
-            raise NotImplementedError("Weight layer not in tail")
+            raise NotImplementedError("\n\t\033[91m[ERROR]:Weight layer not in tail\033[0m")
 
         # Primitive setup
         for name in tails:
-            item = primitives[name]
-            layer_name = item['layer_name'] if item['main_tail'] else name
+            prim_dict = primitives[name]
+            layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
             if subgoal_dict.get(name, None) is not None:
-                # NOTE(tmmichi): absolute subgoal -> relative subgoal
-                # NOTE(tmmichi): replacing observation doesn't work (for some reason.)
-                # print("subgoal dict: ", subgoal_dict[name])
+                # subgoal_dict from weight initialization
                 subgoal_obs, subgoal_obs_idx = subgoal_dict[name]
-                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs: ", summarize=-1)
                 subgoal_layer = np.zeros([len(subgoal_obs_idx), obs.shape[1].value], dtype=np.float32)
-                # replace_cond = np.ones(obs.shape[1].value, dtype=np.int8)
                 for i, idx in enumerate(subgoal_obs_idx):
                     subgoal_layer[i][idx] = 1
-                    # replace_cond[idx] = 0
                 subgoal_obs = tf.matmul(subgoal_obs, subgoal_layer)
-                # subgoal_obs = tf.Print(subgoal_obs, [subgoal_obs, ], "subgoal_obs aft: ", summarize=-1)
-                # obs = tf.Print(obs, [obs, ], "obs: ", summarize=-1)
-                # new_obs = tf.where(replace_cond, obs, subgoal_obs)
+                # NOTE(tmmichi): absolute subgoal -> relative subgoal
                 new_obs = obs + subgoal_obs
-                # new_obs = tf.Print(new_obs, [new_obs, ], "new_obs: ", summarize=-1)
-                # print('new_obs: ',new_obs)
             else:
                 new_obs = obs
 
-            if item['tails'] == None:
+            if prim_dict['tails'] == None:
                 if 'weight' not in name.split('/'):
-                    print('\tGraph of '+name+' initializing')
+                    print('\tGraph of ' + name + ' initializing...')
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
@@ -613,17 +607,17 @@ class FeedForwardPolicy(SACPolicy):
                         
                         #------------- Input observation sieving layer -------------#
                         index_pair = {}
-                        sieve_layer = np.zeros([new_obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                        for i in range(len(item['obs'][1])):
-                            index_pair[item['obs'][1][i]] = i
-                            sieve_layer[item['obs'][1][i]][i] = 1
+                        sieve_layer = np.zeros([new_obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)
+                        for i in range(len(prim_dict['obs'][1])):
+                            index_pair[prim_dict['obs'][1][i]] = i
+                            sieve_layer[prim_dict['obs'][1][i]][i] = 1
                         pi_h = tf.matmul(pi_h, sieve_layer)
                         #------------- Observation sieving layer End -------------#
 
-                        if 'subtract' in item['obs_relativity'].keys():
+                        if 'subtract' in prim_dict['obs_relativity'].keys():
                             print("\tIN SUBTRACT")
-                            ref = item['obs_relativity']['subtract']['ref']
-                            tar = item['obs_relativity']['subtract']['tar']
+                            ref = prim_dict['obs_relativity']['subtract']['ref']
+                            tar = prim_dict['obs_relativity']['subtract']['tar']
                             assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
                             ref_sieve = np.zeros([pi_h.shape[1].value, len(ref)], dtype=np.float32)
                             tar_sieve = np.zeros([pi_h.shape[1].value, len(tar)], dtype=np.float32)
@@ -646,36 +640,35 @@ class FeedForwardPolicy(SACPolicy):
                             else:
                                 pi_h = subs_obs
 
-                        pi_h = mlp(pi_h, item['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
+                        pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         # if aux, then the produced action becomes scaled
-                        mu_ = tf.layers.dense(pi_h, len(item['act'][1]), activation=None) * item.get('act_scale',1)                        
+                        # TODO(tmmichi): constant action scale with 0.1 does not represent same effect after being squashed
+                        mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)                        
 
                         if not non_log:
-                            log_std = tf.layers.dense(pi_h, len(item['act'][1]), activation=None)
+                            log_std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None)
                         else:
-                            std = tf.layers.dense(pi_h, len(item['act'][1]), activation='relu') + EPS
+                            std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='relu') + EPS
                             log_std = tf.log(std)
 
                         mu_array.append(mu_)
-                        self.primitive_actions[name] = mu_
-                        # NOTE: log_std should not be clipped @ primitive level since clipping will cause biased weighting of each primitives
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-                        # log_std = tf.Print(log_std, [mu_, tf.exp(log_std)], name+' mu, std: ', summarize=-1)
                         log_std_array.append(log_std)
+                        act_index.append(prim_dict['act'][1])
+                        
+                        self.primitive_actions[name] = mu_
                         self.primitive_log_std[name] = log_std
-                        act_index.append(item['act'][1])
 
-                        # self.entropy += gaussian_entropy(log_std)
                         tf.summary.merge_all()
-                print('\t' + name + " constructed")
+                    print('\t' + name + " constructed")
             else:
                 if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
-                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, item['tails'], total_action_dimension, reuse, non_log)
+                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, prim_dict['tails'], total_action_dimension, reuse, non_log)
                     mu_array.append(mu_)
                     log_std_array.append(log_std_)
-                    act_index.append(item['act'][1])
+                    act_index.append(prim_dict['act'][1])
                     print('\t' + name + " constructed")
         
         assert not isinstance(weight, type(None)), \
@@ -692,11 +685,11 @@ class FeedForwardPolicy(SACPolicy):
 
         for name in tails:
             # print('name: ', name)
-            item = primitives[name]
-            if item['load_value']:
+            prim_dict = primitives[name]
+            if prim_dict['load_value']:
                 # print('in load_value')
-                layer_name = item['layer_name'] if item['main_tail'] else name
-                if item['tails'] == None:
+                layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
+                if prim_dict['tails'] == None:
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -705,31 +698,31 @@ class FeedForwardPolicy(SACPolicy):
                             critics_h = tf.layers.flatten(obs)
 
                         #------------- Input observation sieving layer -------------#
-                        sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                        for i in range(len(item['obs'][1])):
-                            sieve_layer[item['obs'][1][i]][i] = 1
+                        sieve_layer = np.zeros([obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)
+                        for i in range(len(prim_dict['obs'][1])):
+                            sieve_layer[prim_dict['obs'][1][i]][i] = 1
                         critics_h = tf.matmul(critics_h, sieve_layer)
                         #------------- Observation sieving layer End -------------#
 
                         if create_vf:
                             # Value function
-                            vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                            vf_h = mlp(critics_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                             value_fn = tf.layers.dense(vf_h, 1, name="vf")
                             self.value_fn += value_fn
                             self.primitive_value[layer_name] = value_fn
 
                         if create_qf:
                             #------------- Input action sieving layer -------------#
-                            sieve_layer = np.zeros([action.shape[1], len(item['act'][1])], dtype=np.float32)
-                            for i in range(len(item['act'][1])):
-                                sieve_layer[item['act'][1][i]][i] = 1
+                            sieve_layer = np.zeros([action.shape[1], len(prim_dict['act'][1])], dtype=np.float32)
+                            for i in range(len(prim_dict['act'][1])):
+                                sieve_layer[prim_dict['act'][1][i]][i] = 1
                             qf_h = tf.matmul(action, sieve_layer)
                             #------------- Action sieving layer End -------------#
                             
                             # Concatenate preprocessed state and action
                             qf_h = tf.concat([critics_h, qf_h], axis=-1)
 
-                            qf_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                            qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                             if qf1:
                                 qf = tf.layers.dense(qf_h, 1, name="qf1")
                                 self.qf1 += qf
@@ -740,11 +733,11 @@ class FeedForwardPolicy(SACPolicy):
                                 self.primitive_qf2[layer_name] = qf
                 else:
                     with tf.variable_scope(layer_name, reuse=reuse):
-                        self.construct_value_graph(obs, action, primitives, item['tails'], reuse, create_vf, create_qf, qf1, qf2)
+                        self.construct_value_graph(obs, action, primitives, prim_dict['tails'], reuse, create_vf, create_qf, qf1, qf2)
             if 'weight' in name.split('/'):
                 # print('in weight')
                 composite_name = name.split('/')[0]
-                layer_name = 'train/'+composite_name if item['main_tail'] else composite_name
+                layer_name = 'train/'+composite_name if prim_dict['main_tail'] else composite_name
                 with tf.variable_scope(layer_name, reuse=reuse):
                     if self.feature_extraction == "cnn":
                         critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -753,31 +746,31 @@ class FeedForwardPolicy(SACPolicy):
                         critics_h = tf.layers.flatten(obs)
 
                     #------------- Input observation sieving layer -------------#
-                    sieve_layer = np.zeros([obs.shape[1].value, len(item['obs'][1])], dtype=np.float32)
-                    for i in range(len(item['obs'][1])):
-                        sieve_layer[item['obs'][1][i]][i] = 1
+                    sieve_layer = np.zeros([obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)
+                    for i in range(len(prim_dict['obs'][1])):
+                        sieve_layer[prim_dict['obs'][1][i]][i] = 1
                     critics_h = tf.matmul(critics_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
 
                     if create_vf:
                         # Value function
-                        vf_h = mlp(critics_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        vf_h = mlp(critics_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                         value_fn = tf.layers.dense(vf_h, 1, name="vf")
                         self.value_fn += value_fn
                         self.primitive_value[layer_name] = value_fn
 
                     if create_qf:
                         #------------- Input action sieving layer -------------#
-                        sieve_layer = np.zeros([action.shape[1], len(item['composite_action_index'])], dtype=np.float32)
-                        for i in range(len(item['composite_action_index'])):
-                            sieve_layer[item['composite_action_index']][i] = 1
+                        sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
+                        for i in range(len(prim_dict['composite_action_index'])):
+                            sieve_layer[prim_dict['composite_action_index']][i] = 1
                         qf_h = tf.matmul(action, sieve_layer)
                         #------------- Action sieving layer End -------------#
                         
                         # Concatenate preprocessed state and action
                         qf_h = tf.concat([critics_h, qf_h], axis=-1)
 
-                        qf_h = mlp(qf_h, item['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                         if qf1:
                             qf = tf.layers.dense(qf_h, 1, name="qf1")
                             self.qf1 += qf
