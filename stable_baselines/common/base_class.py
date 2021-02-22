@@ -242,7 +242,9 @@ class BaseRLModel(ABC):
         if self.ep_info_buf is None:
             self.ep_info_buf = deque(maxlen=100)
 
-    def construct_primitive_info(self, name, freeze, level, obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, act_scale, obs_relativity, layer_structure, subgoal=None, loaded_policy=None, load_value=False):
+    def construct_primitive_info(self, name, freeze, level, 
+                                obs_range: Union[dict, int], obs_index, act_range: Union[dict, int], act_index, act_scale, 
+                                obs_relativity, layer_structure, subgoal=None, loaded_policy=None, load_value=False):
         '''
         Returns info of the primitive as a dictionary
 
@@ -1191,14 +1193,8 @@ class ActorCriticRLModel(BaseRLModel):
         #     if isinstance(self.env.action_space, gym.spaces.Box):
         #         clipped_actions = unscale_action(self.env.action_space, clipped_actions)
         # else:
-        #     if self.act_model.box_dist=='beta':
-        #         if isinstance(self.env.action_space, gym.spaces.Box):
-        #             if np.any(np.logical_or(clipped_actions > 1, clipped_actions<0)):
-        #                 print("WARNING: clipped action have an invalid value of",clipped_actions)
-        #             clipped_actions = unscale_action(self.env.action_space, clipped_actions*2-1)
-        #     else:
-        #         if isinstance(self.env.action_space, gym.spaces.Box):
-        #             clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+    #         if isinstance(self.env.action_space, gym.spaces.Box):
+    #             clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
 
         if not vectorized_env:
             if state is not None:

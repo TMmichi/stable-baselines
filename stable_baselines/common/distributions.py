@@ -245,10 +245,8 @@ class DiagGaussianProbabilityDistributionType(ProbabilityDistributionType):
         q_values = linear(vf_latent_vector, 'q', self.size, init_scale=init_scale, init_bias=init_bias)
         if stv_from_obs:
             print("STD from OBSERVATION")
-            # logstd = linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias)
             std = EPS + tf.nn.sigmoid(linear(pi_latent_vector, 'pi/dense_1', self.size, init_scale=init_scale, init_bias=init_bias-0.5))
             logstd = tf.log(std)
-            # logstd = tf.clip_by_value(logstd, LOG_STD_MIN, LOG_STD_MAX)
             pdparam = tf.concat([mean, logstd], axis=1)
         else:
             print("STD from FIXED VALUE")

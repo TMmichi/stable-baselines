@@ -690,7 +690,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     # -> reward structure에 rulebased.
                     # -> reward에 constraint. preference 반영.. <- debugging 용도로 사용. reward function에서 reaching penalty.
 
-
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
