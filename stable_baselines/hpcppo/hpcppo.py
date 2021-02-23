@@ -136,7 +136,7 @@ class HPCPPO(ActorCriticRLModel):
                                        custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
-                                              reuse=True, **self.policy_kwargs)
+                                              reuse=True, add_action_ph=True, **self.policy_kwargs)
                 with tf.variable_scope('model'):
                     act_model.make_HPC_actor(act_model.processed_obs, primitives, self.tails, self.action_space.shape[0], reuse=False)
                     act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, reuse=False)
