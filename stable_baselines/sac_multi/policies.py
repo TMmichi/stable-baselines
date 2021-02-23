@@ -5,7 +5,7 @@ import numpy as np
 from gym.spaces import Box
 
 from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy
-from stable_baselines.common.tf_layers import mlp, linear
+from stable_baselines.common.tf_layers import mlp
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
@@ -882,7 +882,8 @@ class LnMlpPolicy(FeedForwardPolicy):
                                           feature_extraction="mlp", layer_norm=True, **_kwargs)
 
 
-register_policy("CnnPolicy", CnnPolicy)
-register_policy("LnCnnPolicy", LnCnnPolicy)
-register_policy("MlpPolicy", MlpPolicy)
-register_policy("LnMlpPolicy", LnMlpPolicy)
+
+register_policy("CnnPolicy_sac", CnnPolicy)
+register_policy("LnCnnPolicy_sac", LnCnnPolicy)
+register_policy("MlpPolicy_sac", MlpPolicy)
+register_policy("LnMlpPolicy_sac", LnMlpPolicy)

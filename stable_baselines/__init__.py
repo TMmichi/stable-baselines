@@ -4,6 +4,7 @@ from stable_baselines.acktr import ACKTR
 from stable_baselines.deepq import DQN
 from stable_baselines.her import HER
 from stable_baselines.ppo2 import PPO2
+from stable_baselines.hpcppo import HPCPPO
 from stable_baselines.td3 import TD3
 from stable_baselines.sac import SAC
 from stable_baselines.sac_multi import SAC_MULTI

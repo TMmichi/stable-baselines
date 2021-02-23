@@ -17,8 +17,9 @@ class DummyVecEnv(VecEnv):
         (each callable returns a `Gym.Env` instance when called).
     """
 
-    def __init__(self, env_fns):
-        self.envs = [fn() for fn in env_fns]
+    def __init__(self, env_fns, args=None):
+        self.envs = [fn(**args) for fn in env_fns]
+        print("list formed")
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
         obs_space = env.observation_space

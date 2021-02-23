@@ -217,8 +217,8 @@ class ActorCriticPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, box_dist='gaussian', squash=False):
-        super(ActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, obs_phs=None, box_dist='gaussian', squash=False):
+        super(ActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse, obs_phs=obs_phs,
                                                 scale=scale)
         self.box_dist = box_dist
         self.squash = squash
@@ -559,7 +559,6 @@ class FeedForwardPolicy(ActorCriticPolicy):
             net_arch = [dict(vf=layers, pi=layers)]
 
         with tf.variable_scope("model", reuse=reuse):
-            # TODO:
             obs_index = list(range(self.processed_obs.shape[1].value)) if obs_index is None else obs_index
             obs_relativity = {} if obs_relativity is None else obs_relativity
 
@@ -613,7 +612,6 @@ class FeedForwardPolicy(ActorCriticPolicy):
             if feature_extraction == "cnn":
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
             else:
-                #pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
                 pi_latent, vf_latent = mlp_extractor(new_obs, net_arch, act_fun)
 
             self._value_fn = linear(vf_latent, 'values_fn/vf/vf', 1)

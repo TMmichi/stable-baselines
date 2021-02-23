@@ -52,7 +52,7 @@ class HPCPPO(ActorCriticRLModel):
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
 
         self.learning_rate = learning_rate
         self.cliprange = cliprange
@@ -90,7 +90,7 @@ class HPCPPO(ActorCriticRLModel):
 
         super().__init__(policy=policy, env=env, verbose=verbose, requires_vec_env=True,
                          _init_setup_model=_init_setup_model, policy_kwargs=policy_kwargs,
-                         seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
+                         seed=seed, n_cpu_tf_sess=n_cpu_tf_sess, composite_primitive_name=composite_primitive_name)
 
         if _init_setup_model:
             self.setup_model()
@@ -106,9 +106,12 @@ class HPCPPO(ActorCriticRLModel):
         return policy.obs_ph, self.action_ph, policy.deterministic_action
 
     def setup_model(self):
+        pass
+
+    def setup_HPC_model(self, primitives, load_value=True):
         with SetVerbosity(self.verbose):
 
-            assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO2 model must be " \
+            assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the HPCPPO model must be " \
                                                                "an instance of common.policies.ActorCriticPolicy."
 
             self.n_batch = self.n_envs * self.n_steps
@@ -129,14 +132,18 @@ class HPCPPO(ActorCriticRLModel):
                 act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
                                         n_batch_step, reuse=False, **self.policy_kwargs)
 
-                with tf.variable_scope("train_model", reuse=True,
-                                       custom_getter=tf_util.outer_scope_getter("train_model")):
+                with tf.variable_scope("input", reuse=True,
+                                       custom_getter=tf_util.outer_scope_getter("input")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
                                               reuse=True, **self.policy_kwargs)
+                    train_model.make_HPC_actor(self.observation_space, primitives, self.tails, self.action_space.shape[0])
+                    train_model.make_HPC_critics(self.processed_next_obs_ph, None, primitives, self.tails)
+
 
                 with tf.variable_scope("loss", reuse=False):
-                    self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
+                    # self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
+                    self.action_ph = train_model.action_ph
                     self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
                     self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
                     self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
@@ -144,8 +151,8 @@ class HPCPPO(ActorCriticRLModel):
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
                     self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
-                    neglogpac = train_model.proba_distribution.neglogp(self.action_ph)
-                    self.entropy = tf.reduce_mean(train_model.proba_distribution.entropy())
+                    neglogpac = train_model.neglogp
+                    self.entropy = tf.reduce_mean(train_model.entropy)
 
                     vpred = train_model.value_flat
 

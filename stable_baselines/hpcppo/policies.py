@@ -2,10 +2,9 @@ from abc import abstractmethod
 
 import tensorflow as tf
 import numpy as np
-from gym.spaces import Box
 
-from stable_baselines.common.policies import BasePolicy, ActorCriticPolicy, nature_cnn, register_policy
-from stable_baselines.common.tf_layers import mlp, linear
+from stable_baselines.common.policies import ActorCriticPolicy, nature_cnn, register_policy
+from stable_baselines.common.tf_layers import mlp
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
@@ -25,8 +24,8 @@ def gaussian_likelihood(input_, mu_, log_std):
     :return: (tf.Tensor)
     """
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
-    pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
+    # pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
+    # pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 def gaussian_entropy(log_std):
@@ -101,9 +100,9 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     return pi_MCP, mu_MCP, log_std_MCP
 
 
-class HPCPolicy(ActorCriticPolicy):
+class HPCPPOPolicy(ActorCriticPolicy):
     """
-    Policy object that implements a HPCPolicy.
+    Policy object that implements a HPCPPOPolicy.
 
     :param sess: (TensorFlow session) The current TensorFlow session
     :param ob_space: (Gym Space) The observation space of the environment
@@ -124,7 +123,7 @@ class HPCPolicy(ActorCriticPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers={}, obs_phs=None,
                  cnn_extractor=nature_cnn, feature_extraction="cnn", reg_weight=0.0,
                  layer_norm=False, act_fun=tf.nn.relu, **kwargs):
-        super(HPCPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
+        super(HPCPPOPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse, scale=(feature_extraction == "cnn"), obs_phs=obs_phs)
 
         self._kwargs_check(feature_extraction, kwargs)
@@ -149,6 +148,7 @@ class HPCPolicy(ActorCriticPolicy):
         self.primitive_actions = {}
         self.primitive_log_std = {}
         self.primitive_value = {}
+        self.primitive_vf = {}
         self.primitive_qf = {}
         self.reg_loss = None
         self.reg_weight = reg_weight
@@ -180,6 +180,7 @@ class HPCPolicy(ActorCriticPolicy):
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         weight_val = [self.weight[name] for name in self.weight.keys()]
         policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
+        self.neglogp = -logp_pi
         self.policy = policy
         self.deterministic_policy = deterministic_policy
 
@@ -204,7 +205,9 @@ class HPCPolicy(ActorCriticPolicy):
 
         with tf.variable_scope(scope, reuse=reuse):
             with tf.variable_scope('qf', reuse=reuse):
-                self.construct_value_graph(obs, action, primitives, tails, reuse=reuse)
+                self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, qf=True)
+            with tf.variable_scope('vf', reuse=reuse):
+                self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, vf=True)
 
         return self.qf, self.value_fn
 
@@ -243,7 +246,6 @@ class HPCPolicy(ActorCriticPolicy):
                     
                     subgoal_dict = {}
                     if prim_dict.get('subgoal', None) is not None:
-                        
                         for prim_name, obs_idx in prim_dict['subgoal'].items():
                             assert prim_name in tails, "\n\t\033[91m[ERROR]: name of the target primitive not in tails or does not match\033[0m"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
@@ -355,7 +357,7 @@ class HPCPolicy(ActorCriticPolicy):
         
         return pi_MCP, mu_MCP, log_std_MCP
   
-    def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False):
+    def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, vf=False, qf=False):
         print("Received tails in value graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -414,24 +416,34 @@ class HPCPolicy(ActorCriticPolicy):
                     critics_h = tf.matmul(critics_h, sieve_layer)
                     #------------- Observation sieving layer End -------------#
 
-                    #------------- Input action sieving layer -------------#
-                    sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
-                    for i in range(len(prim_dict['composite_action_index'])):
-                        sieve_layer[prim_dict['composite_action_index']][i] = 1
-                    qf_h = tf.matmul(action, sieve_layer)
-                    #------------- Action sieving layer End -------------#
-                    
-                    # Concatenate preprocessed state and action
-                    qf_h = tf.concat([critics_h, qf_h], axis=-1)
-                    qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                    qf = tf.layers.dense(qf_h, 1, name="qf")
-                    self.qf += qf
-                    self.primitive_qf[layer_name] = qf
+                    if vf:
+                        vf_h = mlp(vf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        vf = tf.layers.dense(vf_h, 1, name='vf')
+                        self.value_fn += vf
+                        self.primitive_vf[layer_name] = vf
+
+                    if qf:
+                        #------------- Input action sieving layer -------------#
+                        sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
+                        for i in range(len(prim_dict['composite_action_index'])):
+                            sieve_layer[prim_dict['composite_action_index']][i] = 1
+                        qf_h = tf.matmul(action, sieve_layer)
+                        #------------- Action sieving layer End -------------#
+                        
+                        # Concatenate preprocessed state and action
+                        qf_h = tf.concat([critics_h, qf_h], axis=-1)
+                        qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        qf = tf.layers.dense(qf_h, 1, name="qf")
+                        self.qf += qf
+                        self.primitive_qf[layer_name] = qf
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
             return self.sess.run(self.deterministic_policy, {self.obs_ph: obs})
         return self.sess.run(self.policy, {self.obs_ph: obs})
+    
+    def value(self, obs, state=None, mask=None):
+        return self.sess.run(self.value_flat, {self.obs_ph: obs})
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
@@ -452,9 +464,15 @@ class HPCPolicy(ActorCriticPolicy):
     
     def kl(self, other):
         return self.dist.kl_divergence(other.dist)
+    
+    def get_logstd(self, obs):
+        obs = np.array(obs)
+        obs = obs.reshape((-1,) + obs.shape)
+        logstd = tf.log(self.std)
+        return self.sess.run([logstd], {self.obs_ph: obs})
 
 
-class CnnPolicy(FeedForwardPolicy):
+class CnnPolicy(HPCPPOPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN)
 
@@ -472,8 +490,7 @@ class CnnPolicy(FeedForwardPolicy):
         super(CnnPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse, layers, obs_phs=obs_phs, 
                                         feature_extraction="cnn", **_kwargs)
 
-
-class LnCnnPolicy(FeedForwardPolicy):
+class LnCnnPolicy(HPCPPOPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN), with layer normalisation
 
@@ -491,8 +508,7 @@ class LnCnnPolicy(FeedForwardPolicy):
         super(LnCnnPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse, layers, obs_phs=obs_phs, 
                                           feature_extraction="cnn", layer_norm=True, **_kwargs)
 
-
-class MlpPolicy(FeedForwardPolicy):
+class MlpPolicy(HPCPPOPolicy):
     """
     Policy object that implements actor critic, using a MLP (2 layers of 64)
 
@@ -510,8 +526,7 @@ class MlpPolicy(FeedForwardPolicy):
         super(MlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse, layers, obs_phs=obs_phs, 
                                         feature_extraction="mlp", **_kwargs)
 
-
-class LnMlpPolicy(FeedForwardPolicy):
+class LnMlpPolicy(HPCPPOPolicy):
     """
     Policy object that implements actor critic, using a MLP (2 layers of 64), with layer normalisation
 
@@ -530,7 +545,7 @@ class LnMlpPolicy(FeedForwardPolicy):
                                           feature_extraction="mlp", layer_norm=True, **_kwargs)
 
 
-register_policy("CnnPolicy", CnnPolicy)
-register_policy("LnCnnPolicy", LnCnnPolicy)
-register_policy("MlpPolicy", MlpPolicy)
-register_policy("LnMlpPolicy", LnMlpPolicy)
+register_policy("CnnPolicy_hpcppo", CnnPolicy)
+register_policy("LnCnnPolicy_hpcppo", LnCnnPolicy)
+register_policy("MlpPolicy_hpcppo", MlpPolicy)
+register_policy("LnMlpPolicy_hpcppo", LnMlpPolicy)

@@ -1139,10 +1139,10 @@ class ActorCriticRLModel(BaseRLModel):
     """
 
     def __init__(self, policy, env, _init_setup_model, verbose=0, policy_base=ActorCriticPolicy,
-                 requires_vec_env=False, policy_kwargs=None, seed=None, n_cpu_tf_sess=None):
+                 requires_vec_env=False, policy_kwargs=None, seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
         super(ActorCriticRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
                                                  policy_base=policy_base, policy_kwargs=policy_kwargs,
-                                                 seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
+                                                 seed=seed, n_cpu_tf_sess=n_cpu_tf_sess, composite_primitive_name=composite_primitive_name)
         self.sess = None
         self.initial_state = None
         self.step = None
@@ -1407,6 +1407,7 @@ class OffPolicyRLModel(BaseRLModel):
                                                                               kwargs['policy_kwargs']))
         if policy is not None:
             policy_model = policy
+            print(data)
             data.pop('policy')
         else:
             policy_model = data['policy']
