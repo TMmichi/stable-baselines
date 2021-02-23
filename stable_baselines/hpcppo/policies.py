@@ -153,6 +153,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
         self.reg_loss = None
         self.reg_weight = reg_weight
         self.activ_fn = act_fun
+        self._neglogp = 0
+
 
     def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
         """
@@ -179,9 +181,9 @@ class HPCPPOPolicy(ActorCriticPolicy):
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         weight_val = [self.weight[name] for name in self.weight.keys()]
-        policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
-        self.neglogp = -logp_pi
-        self.policy = policy
+        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
+        self._neglogp = -logp_pi
+        self._policy = policy
         self.deterministic_policy = deterministic_policy
 
         return deterministic_policy, policy, logp_pi
@@ -198,18 +200,18 @@ class HPCPPOPolicy(ActorCriticPolicy):
         :return: ([tf.Tensor]) Mean, action and log probability
         """
         self.qf = 0
-        self.value_fn = 0
+        self._value_fn = 0
 
         if obs is None:
             obs = self.processed_obs
 
         with tf.variable_scope(scope, reuse=reuse):
-            with tf.variable_scope('qf', reuse=reuse):
-                self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, qf=True)
+            # with tf.variable_scope('qf', reuse=reuse):
+            #     self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, qf=True)
             with tf.variable_scope('vf', reuse=reuse):
                 self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, vf=True)
 
-        return self.qf, self.value_fn
+        return self.qf, self._value_fn
 
     def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
         print("Received tails in actor graph: ",tails)
@@ -417,12 +419,14 @@ class HPCPPOPolicy(ActorCriticPolicy):
                     #------------- Observation sieving layer End -------------#
 
                     if vf:
-                        vf_h = mlp(vf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        vf_h = mlp(critics_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                         vf = tf.layers.dense(vf_h, 1, name='vf')
-                        self.value_fn += vf
+                        self._value_fn += vf
+                        self._value_flat = self.value_fn[:, 0]
                         self.primitive_vf[layer_name] = vf
 
                     if qf:
+                        assert action is not None, "\n\t\033[91m[ERROR]: Action should be defined when initializing Q network\033[0m"
                         #------------- Input action sieving layer -------------#
                         sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
                         for i in range(len(prim_dict['composite_action_index'])):
@@ -439,8 +443,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run(self.deterministic_policy, {self.obs_ph: obs})
-        return self.sess.run(self.policy, {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def value(self, obs, state=None, mask=None):
         return self.sess.run(self.value_flat, {self.obs_ph: obs})

@@ -551,7 +551,10 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
                         raise NotImplementedError("Image input not supported for now")
                     else:
+                        print('obs type: ',type(obs))
+                        print('obs',obs)
                         pi_h = tf.layers.flatten(obs)
+                        quit()
                     
                     #------------- Input observation sieving layer -------------#
                     sieve_layer = np.zeros([obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)

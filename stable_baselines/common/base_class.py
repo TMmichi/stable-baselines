@@ -824,11 +824,7 @@ class BaseRLModel(ABC):
         model.__dict__.update(data)
         
         model.set_env(env)
-        try:
-            model.setup_HPC_model(model.primitives)
-        except Exception as e:
-            print(e)
-            raise NotImplementedError("\n\t\033[91m[ERROR]: Given algorithm does not support compository scheme. Try load(path) instead.\033[0m")
+        model.setup_HPC_model(model.primitives)
 
         model.load_parameters(model.primitives['pretrained_param'][1], exact_match=False)
         model.primitives.pop('pretrained_param')

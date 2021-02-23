@@ -128,21 +128,23 @@ class HPCPPO(ActorCriticRLModel):
                         "the number of environments run in parallel should be a multiple of nminibatches."
                     n_batch_step = self.n_envs
                     n_batch_train = self.n_batch // self.nminibatches
-
+                
                 act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
                                         n_batch_step, reuse=False, **self.policy_kwargs)
 
-                with tf.variable_scope("input", reuse=True,
-                                       custom_getter=tf_util.outer_scope_getter("input")):
+                with tf.variable_scope("train_model", reuse=True,
+                                       custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
                                               reuse=True, **self.policy_kwargs)
-                    train_model.make_HPC_actor(self.observation_space, primitives, self.tails, self.action_space.shape[0])
-                    train_model.make_HPC_critics(self.processed_next_obs_ph, None, primitives, self.tails)
+                with tf.variable_scope('model'):
+                    act_model.make_HPC_actor(act_model.processed_obs, primitives, self.tails, self.action_space.shape[0], reuse=False)
+                    act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, reuse=False)
+                    train_model.make_HPC_actor(train_model.processed_obs, primitives, self.tails, self.action_space.shape[0], reuse=True)
+                    train_model.make_HPC_critics(train_model.obs_ph, None, primitives, self.tails, reuse=True)
 
 
                 with tf.variable_scope("loss", reuse=False):
-                    # self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
                     self.action_ph = train_model.action_ph
                     self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
                     self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
@@ -483,7 +485,7 @@ class Runner(AbstractEnvRunner):
         mb_states = self.states
         ep_infos = []
         for iteration in range(self.n_steps):
-            actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            actions, values, neglogpacs = self.model.step(self.obs, self.states, self.dones)
 
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)

@@ -363,8 +363,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Initialize Placeholders
                     self.observations_ph = self.policy_tf.obs_ph
                     # Normalized observation for pixels
-                    self.processed_obs_ph = self.policy_tf.processed_obs
-                    #tf.summary.histogram('observations', self.processed_obs_ph)
+                    self.processed_obs_ph = self.policy_tf.processed_obs                    
                     self.next_observations_ph = self.target_policy.obs_ph
                     self.processed_next_obs_ph = self.target_policy.processed_obs
                     # None
