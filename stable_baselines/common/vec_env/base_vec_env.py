@@ -139,14 +139,14 @@ class VecEnv(ABC):
         """
         pass
 
-    def step(self, actions):
+    def step(self, actions, log=False, weight=None, subgoal=None):
         """
         Step the environments with the given action
 
         :param actions: ([int] or [float]) the action
         :return: ([int] or [float], [float], [bool], dict) observation, reward, done, information
         """
-        self.step_async(actions)
+        self.step_async(actions, log, weight, subgoal)
         return self.step_wait()
 
     def get_images(self, *args, **kwargs) -> Sequence[np.ndarray]:
@@ -226,8 +226,8 @@ class VecEnvWrapper(VecEnv):
                         action_space=action_space or venv.action_space)
         self.class_attributes = dict(inspect.getmembers(self.__class__))
 
-    def step_async(self, actions):
-        self.venv.step_async(actions)
+    def step_async(self, actions, log=None, weight=None, subgoal=None):
+        self.venv.step_async(actions, log, weight, subgoal)
 
     @abstractmethod
     def reset(self):

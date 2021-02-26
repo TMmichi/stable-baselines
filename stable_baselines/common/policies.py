@@ -217,9 +217,9 @@ class ActorCriticPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, obs_phs=None, box_dist='gaussian', squash=False):
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, obs_phs=None, box_dist='gaussian', squash=False, add_action_ph=False):
         super(ActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse, obs_phs=obs_phs,
-                                                scale=scale)
+                                                scale=scale,add_action_ph=add_action_ph)
         self.box_dist = box_dist
         self.squash = squash
         self._pdtype = make_proba_dist_type(ac_space, box_dist, squash)

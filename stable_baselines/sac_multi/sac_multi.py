@@ -696,7 +696,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     weight = None
                     subgoal = None
                 else:
-                    #NOTE: non_subgoal
+                    # NOTE: non_subgoal
                     # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                     # weight = subgoal = None
                     # NOTE: subgoal

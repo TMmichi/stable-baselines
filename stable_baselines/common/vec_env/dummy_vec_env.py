@@ -32,15 +32,23 @@ class DummyVecEnv(VecEnv):
         self.buf_rews = np.zeros((self.num_envs,), dtype=np.float32)
         self.buf_infos = [{} for _ in range(self.num_envs)]
         self.actions = None
+        self.log = None
+        self.weight = None
+        self.subgoal = None
         self.metadata = env.metadata
 
-    def step_async(self, actions):
+    def step_async(self, actions, log=None, weight=None, subgoal=None):
         self.actions = actions
+        self.weight = weight
+        self.subgoal = subgoal
+        # print(actions)
+        # print(weight)
+        # print(subgoal)
 
     def step_wait(self):
         for env_idx in range(self.num_envs):
             obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
-                self.envs[env_idx].step(self.actions[env_idx])
+                self.envs[env_idx].step(self.actions[env_idx], log=True, weight=list(self.weight['level1_picking/weight'][env_idx]), subgoal=self.subgoal)
             if self.buf_dones[env_idx]:
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]['terminal_observation'] = obs

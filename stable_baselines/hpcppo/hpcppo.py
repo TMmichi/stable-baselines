@@ -129,121 +129,142 @@ class HPCPPO(ActorCriticRLModel):
                     n_batch_step = self.n_envs
                     n_batch_train = self.n_batch // self.nminibatches
                 
-                act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
-                                        n_batch_step, reuse=False, **self.policy_kwargs)
-
-                with tf.variable_scope("train_model", reuse=True,
-                                       custom_getter=tf_util.outer_scope_getter("train_model")):
-                    train_model = self.policy(self.sess, self.observation_space, self.action_space,
-                                              self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
-                                              reuse=True, add_action_ph=True, **self.policy_kwargs)
-                with tf.variable_scope('model'):
-                    act_model.make_HPC_actor(act_model.processed_obs, primitives, self.tails, self.action_space.shape[0], reuse=False)
-                    act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, reuse=False)
-                    train_model.make_HPC_actor(train_model.processed_obs, primitives, self.tails, self.action_space.shape[0], reuse=True)
-                    train_model.make_HPC_critics(train_model.obs_ph, None, primitives, self.tails, reuse=True)
-
-
-                with tf.variable_scope("loss", reuse=False):
-                    self.action_ph = train_model.action_ph
-                    self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
-                    self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
-                    self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
-                    self.old_vpred_ph = tf.placeholder(tf.float32, [None], name="old_vpred_ph")
-                    self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
-                    self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
-
-                    neglogpac = train_model.neglogp
-                    self.entropy = tf.reduce_mean(train_model.entropy)
-
-                    vpred = train_model.value_flat
-
-                    # Value function clipping: not present in the original PPO
-                    if self.cliprange_vf is None:
-                        # Default behavior (legacy from OpenAI baselines):
-                        # use the same clipping as for the policy
-                        self.clip_range_vf_ph = self.clip_range_ph
-                        self.cliprange_vf = self.cliprange
-                    elif isinstance(self.cliprange_vf, (float, int)) and self.cliprange_vf < 0:
-                        # Original PPO implementation: no value function clipping
-                        self.clip_range_vf_ph = None
-                    else:
-                        # Last possible behavior: clipping range
-                        # specific to the value function
-                        self.clip_range_vf_ph = tf.placeholder(tf.float32, [], name="clip_range_vf_ph")
-
-                    if self.clip_range_vf_ph is None:
-                        # No clipping
-                        vpred_clipped = train_model.value_flat
-                    else:
-                        # Clip the different between old and new value
-                        # NOTE: this depends on the reward scaling
-                        vpred_clipped = self.old_vpred_ph + \
-                            tf.clip_by_value(train_model.value_flat - self.old_vpred_ph,
-                                             - self.clip_range_vf_ph, self.clip_range_vf_ph)
-
-
-                    vf_losses1 = tf.square(vpred - self.rewards_ph)
-                    vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
-                    self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
-
-                    ratio = tf.exp(self.old_neglog_pac_ph - neglogpac)
-                    pg_losses = -self.advs_ph * ratio
-                    pg_losses2 = -self.advs_ph * tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 +
-                                                                  self.clip_range_ph)
-                    self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
-                    self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
-                    self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
-                                                                      self.clip_range_ph), tf.float32))
-                    loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
-
-                    tf.summary.scalar('entropy_loss', self.entropy)
-                    tf.summary.scalar('policy_gradient_loss', self.pg_loss)
-                    tf.summary.scalar('value_function_loss', self.vf_loss)
-                    tf.summary.scalar('approximate_kullback-leibler', self.approxkl)
-                    tf.summary.scalar('clip_factor', self.clipfrac)
-                    tf.summary.scalar('loss', loss)
-
+                loaded = True if 'loaded' in primitives.keys() else False
+                if loaded:
                     with tf.variable_scope('model'):
+                        act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
+                                        n_batch_step, reuse=False, **self.policy_kwargs)
+                        act_model.make_HPC_actor(act_model.obs_ph, primitives, self.tails, self.action_space.shape[0], 
+                                                reuse=False, scope='pi', loaded=True)
+                        act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, 
+                                                reuse=False, loaded=True)
                         self.params = tf.trainable_variables()
-                        if self.full_tensorboard_log:
-                            for var in self.params:
-                                tf.summary.histogram(var.name, var)
-                    grads = tf.gradients(loss, self.params)
-                    if self.max_grad_norm is not None:
-                        grads, _grad_norm = tf.clip_by_global_norm(grads, self.max_grad_norm)
-                    grads = list(zip(grads, self.params))
-                trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-5)
-                self._train = trainer.apply_gradients(grads)
+                else:
+                    with tf.variable_scope('model'):
+                        act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
+                                            n_batch_step, reuse=False, **self.policy_kwargs)
+                        act_model.make_HPC_actor(act_model.obs_ph, primitives, self.tails, self.action_space.shape[0], reuse=False)
+                        act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, reuse=False)
 
-                self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+                        with tf.variable_scope("train_model", reuse=True,
+                                            custom_getter=tf_util.outer_scope_getter("train_model")):
 
-                with tf.variable_scope("input_info", reuse=False):
-                    tf.summary.scalar('discounted_rewards', tf.reduce_mean(self.rewards_ph))
-                    tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
-                    tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
-                    tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_range_ph))
-                    if self.clip_range_vf_ph is not None:
-                        tf.summary.scalar('clip_range_vf', tf.reduce_mean(self.clip_range_vf_ph))
+                            train_model = self.policy(self.sess, self.observation_space, self.action_space,
+                                                    self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
+                                                    reuse=True, add_action_ph=False, **self.policy_kwargs)
+                            train_model.make_HPC_actor(train_model.obs_ph, primitives, self.tails, self.action_space.shape[0], reuse=True)
+                            train_model.make_HPC_critics(train_model.obs_ph, None, primitives, self.tails, reuse=True)
 
-                    tf.summary.scalar('old_neglog_action_probability', tf.reduce_mean(self.old_neglog_pac_ph))
-                    tf.summary.scalar('old_value_pred', tf.reduce_mean(self.old_vpred_ph))
+                    with tf.variable_scope("loss", reuse=False):
+                        # self.action_ph = train_model.action_ph
+                        self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
+                        self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
+                        self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
+                        self.old_vpred_ph = tf.placeholder(tf.float32, [None], name="old_vpred_ph")
+                        self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
+                        self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
-                    if self.full_tensorboard_log:
-                        tf.summary.histogram('discounted_rewards', self.rewards_ph)
-                        tf.summary.histogram('learning_rate', self.learning_rate_ph)
-                        tf.summary.histogram('advantage', self.advs_ph)
-                        tf.summary.histogram('clip_range', self.clip_range_ph)
-                        tf.summary.histogram('old_neglog_action_probability', self.old_neglog_pac_ph)
-                        tf.summary.histogram('old_value_pred', self.old_vpred_ph)
-                        if tf_util.is_image(self.observation_space):
-                            tf.summary.image('observation', train_model.obs_ph)
+                        neglogpac = train_model.neglogp
+                        self.entropy = tf.reduce_mean(train_model.entropy)
+
+                        vpred = train_model.value_flat
+
+                        # Value function clipping: not present in the original PPO
+                        if self.cliprange_vf is None:
+                            # Default behavior (legacy from OpenAI baselines):
+                            # use the same clipping as for the policy
+                            self.clip_range_vf_ph = self.clip_range_ph
+                            self.cliprange_vf = self.cliprange
+                        elif isinstance(self.cliprange_vf, (float, int)) and self.cliprange_vf < 0:
+                            # Original PPO implementation: no value function clipping
+                            self.clip_range_vf_ph = None
                         else:
-                            tf.summary.histogram('observation', train_model.obs_ph)
+                            # Last possible behavior: clipping range
+                            # specific to the value function
+                            self.clip_range_vf_ph = tf.placeholder(tf.float32, [], name="clip_range_vf_ph")
 
-                self.train_model = train_model
+                        if self.clip_range_vf_ph is None:
+                            # No clipping
+                            vpred_clipped = train_model.value_flat
+                        else:
+                            # Clip the different between old and new value
+                            # NOTE: this depends on the reward scaling
+                            vpred_clipped = self.old_vpred_ph + \
+                                tf.clip_by_value(train_model.value_flat - self.old_vpred_ph,
+                                                - self.clip_range_vf_ph, self.clip_range_vf_ph)
+
+
+                        vf_losses1 = tf.square(vpred - self.rewards_ph)
+                        vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
+                        self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
+
+                        ratio = tf.exp(self.old_neglog_pac_ph - neglogpac)
+                        pg_losses = -self.advs_ph * ratio
+                        pg_losses2 = -self.advs_ph * tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 +
+                                                                    self.clip_range_ph)
+                        self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
+                        self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
+                        self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
+                                                                        self.clip_range_ph), tf.float32))
+                        loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
+
+                        tf.summary.scalar('entropy_loss', self.entropy)
+                        tf.summary.scalar('policy_gradient_loss', self.pg_loss)
+                        tf.summary.scalar('value_function_loss', self.vf_loss)
+                        tf.summary.scalar('approximate_kullback-leibler', self.approxkl)
+                        tf.summary.scalar('clip_factor', self.clipfrac)
+                        tf.summary.scalar('loss', loss)
+
+                        # with tf.variable_scope('model'):
+                        #     self.params = tf.trainable_variables()
+                        #     self.trainable_params = 
+                        #     if self.full_tensorboard_log:
+                        #         for var in self.params:
+                        #             tf.summary.histogram(var.name, var)
+                        self.params = tf_util.get_trainable_vars('model')
+                        self.trainable_params = []
+                        for var in self.params:
+                            if self.full_tensorboard_log:
+                                tf.summary.histogram(var.name, var)
+                            if 'train' in var.name.split('/'):
+                                self.trainable_params.append(var)
+                            
+                        grads = tf.gradients(loss, self.trainable_params)
+                        if self.max_grad_norm is not None:
+                            grads, _grad_norm = tf.clip_by_global_norm(grads, self.max_grad_norm)
+                        grads = list(zip(grads, self.trainable_params))
+                    trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-5)
+                    self._train = trainer.apply_gradients(grads)
+
+                    self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+
+                    with tf.variable_scope("input_info", reuse=False):
+                        tf.summary.scalar('discounted_rewards', tf.reduce_mean(self.rewards_ph))
+                        tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
+                        tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
+                        tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_range_ph))
+                        if self.clip_range_vf_ph is not None:
+                            tf.summary.scalar('clip_range_vf', tf.reduce_mean(self.clip_range_vf_ph))
+
+                        tf.summary.scalar('old_neglog_action_probability', tf.reduce_mean(self.old_neglog_pac_ph))
+                        tf.summary.scalar('old_value_pred', tf.reduce_mean(self.old_vpred_ph))
+
+                        if self.full_tensorboard_log:
+                            tf.summary.histogram('discounted_rewards', self.rewards_ph)
+                            tf.summary.histogram('learning_rate', self.learning_rate_ph)
+                            tf.summary.histogram('advantage', self.advs_ph)
+                            tf.summary.histogram('clip_range', self.clip_range_ph)
+                            tf.summary.histogram('old_neglog_action_probability', self.old_neglog_pac_ph)
+                            tf.summary.histogram('old_value_pred', self.old_vpred_ph)
+                            if tf_util.is_image(self.observation_space):
+                                tf.summary.image('observation', train_model.obs_ph)
+                            else:
+                                tf.summary.histogram('observation', train_model.obs_ph)
+
+                    self.train_model = train_model
                 self.act_model = act_model
                 self.step = act_model.step
+                self.subgoal_step = act_model.subgoal_step
                 self.proba_step = act_model.proba_step
                 self.logstd = act_model.get_logstd
                 self.value = act_model.value
@@ -274,7 +295,7 @@ class HPCPPO(ActorCriticRLModel):
         """
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-        td_map = {self.train_model.obs_ph: obs, self.action_ph: actions,
+        td_map = {self.train_model.obs_ph: obs,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.learning_rate_ph: learning_rate, self.clip_range_ph: cliprange,
                   self.old_neglog_pac_ph: neglogpacs, self.old_vpred_ph: values}
@@ -300,10 +321,17 @@ class HPCPPO(ActorCriticRLModel):
                     td_map, options=run_options, run_metadata=run_metadata)
                 writer.add_run_metadata(run_metadata, 'step%d' % (update * update_fac))
             else:
-                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
-                    td_map)
-            writer.add_summary(summary, (update * update_fac))
+                # summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
+                #     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
+                #     td_map)
+                policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
+                    [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],td_map)
+                print('policy_loss: ',policy_loss)
+                print('value_loss: ',value_loss)
+                print('policy_entropy: ',policy_entropy)
+                print('approxkl: ',approxkl)
+                print('clipfrac: ',clipfrac)
+            # writer.add_summary(summary, (update * update_fac))
         else:
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train], td_map)
@@ -344,10 +372,10 @@ class HPCPPO(ActorCriticRLModel):
 
                 callback.on_rollout_start()
                 # true_reward is the reward without discount
+                print("############################################RUNNER CALL############################################")
                 rollout = self.runner.run(callback)
                 # Unpack
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = rollout
-
                 callback.on_rollout_end()
 
                 # Early stopping due to the callback
@@ -359,6 +387,7 @@ class HPCPPO(ActorCriticRLModel):
                 if states is None:  # nonrecurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs, 1)
                     inds = np.arange(self.n_batch)
+                    print("############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(inds)
                         for start in range(0, self.n_batch, batch_size):
@@ -402,7 +431,7 @@ class HPCPPO(ActorCriticRLModel):
                 if save_interval and save_path != None:
                     if (update+1) % int(save_interval) == 0 and update:
                         print("saved")
-                        self.save(save_path+"/policy_"+str(update*self.n_batch+loaded_step_num+1))
+                        self.save(save_path+"/policy_"+str(update*self.n_batch+loaded_step_num+1), hierarchical=True)
 
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, returns)
@@ -422,8 +451,22 @@ class HPCPPO(ActorCriticRLModel):
             callback.on_training_end()
             return self
 
-    def save(self, save_path, cloudpickle=False):
+    def predict_subgoal(self, observation, deterministic=True):
+        observation = np.array(observation)
+        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
+
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        actions, subgoal, weight, _, _  = self.act_model.subgoal_step(observation, deterministic=deterministic)
+        actions = unscale_action(self.action_space, actions)
+
+        if not vectorized_env:
+            actions = actions[0]
+        
+        return actions, subgoal, weight
+
+    def save(self, save_path, cloudpickle=False, hierarchical=False):
         data = {
+            "composite_primitive_name": self.composite_primitive_name,
             "gamma": self.gamma,
             "n_steps": self.n_steps,
             "vf_coef": self.vf_coef,
@@ -439,6 +482,9 @@ class HPCPPO(ActorCriticRLModel):
             "policy": self.policy,
             "observation_space": self.observation_space,
             "action_space": self.action_space,
+            "primitives": self.primitives,
+            "tails": self.tails,
+            "policy": self.policy,
             "n_envs": self.n_envs,
             "n_cpu_tf_sess": self.n_cpu_tf_sess,
             "seed": self.seed,
@@ -446,7 +492,7 @@ class HPCPPO(ActorCriticRLModel):
             "policy_kwargs": self.policy_kwargs
         }
 
-        params_to_save = self.get_parameters()
+        params_to_save = self.get_parameters(hierarchical)
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
 
@@ -485,7 +531,9 @@ class Runner(AbstractEnvRunner):
         mb_states = self.states
         ep_infos = []
         for iteration in range(self.n_steps):
-            actions, values, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            # action from the act_model
+            # actions, values, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            actions, subgoal, weight, values, neglogpacs = self.model.subgoal_step(self.obs, self.states, self.dones)
 
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
@@ -502,7 +550,7 @@ class Runner(AbstractEnvRunner):
                 if isinstance(self.env.action_space, gym.spaces.Box):
                     clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             
-            self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
+            self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions, weight=weight, subgoal=subgoal)
 
             self.model.num_timesteps += self.n_envs
 

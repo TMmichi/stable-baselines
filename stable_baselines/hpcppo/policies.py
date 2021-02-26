@@ -122,9 +122,9 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers={}, obs_phs=None,
                  cnn_extractor=nature_cnn, feature_extraction="cnn", reg_weight=0.0,
-                 layer_norm=False, act_fun=tf.nn.relu, **kwargs):
+                 layer_norm=False, act_fun=tf.nn.relu, add_action_ph=False, **kwargs):
         super(HPCPPOPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
-                                                reuse=reuse, scale=(feature_extraction == "cnn"), obs_phs=obs_phs)
+                                                reuse=reuse, scale=(feature_extraction == "cnn"), obs_phs=obs_phs, add_action_ph=add_action_ph)
 
         self._kwargs_check(feature_extraction, kwargs)
         self.dist = None
@@ -156,7 +156,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         self._neglogp = 0
 
 
-    def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi"):
+    def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi", loaded=False):
         """
         Creates a HPC actor object
 
@@ -165,9 +165,11 @@ class HPCPPOPolicy(ActorCriticPolicy):
         :param total_action_dimension: (int) Dimension of a total action
         :param reuse: (bool) whether or not to reuse parameters
         :param scope: (str) the scope name of the actor
+        :param laoded: (bool) whether or not the policy is loaded
         :return: (TensorFlow Tensor) the output tensor
         """
         non_log = True
+        scope = scope + '/loaded' if loaded else scope
 
         if obs is None:
             obs = self.processed_obs
@@ -188,7 +190,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
         return deterministic_policy, policy, logp_pi
  
-    def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False):
+    def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, reuse=False, scope="values_fn", loaded=False):
         """
         Creates the two Q-Values approximator along with the HPC Value function
 
@@ -208,7 +210,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
         with tf.variable_scope(scope, reuse=reuse):
             # with tf.variable_scope('qf', reuse=reuse):
             #     self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, qf=True)
-            with tf.variable_scope('vf', reuse=reuse):
+            scope_name = 'vf/loaded' if loaded else 'vf'
+            with tf.variable_scope(scope_name, reuse=reuse):
                 self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, vf=True)
 
         return self.qf, self._value_fn
@@ -451,8 +454,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self.subgoal, self.weight], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})

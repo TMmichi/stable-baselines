@@ -10,6 +10,7 @@ from typing import Union, List, Callable, Optional
 import gym
 import cloudpickle
 import numpy as np
+from numpy.lib.npyio import load
 import tensorflow as tf
 
 from stable_baselines.common.radam import RAdamOptimizer
@@ -394,7 +395,8 @@ class BaseRLModel(ABC):
             if 'pi' in name_elem:
                 insert_index = 2
                 add_value = True
-            elif 'values_fn' in name_elem and layer_name != 'loaded':
+            # elif 'values_fn' in name_elem and layer_name != 'loaded':
+            elif 'values_fn' in name_elem:                
                 if load_value:
                     insert_index = 3
                     add_value = True
@@ -403,7 +405,7 @@ class BaseRLModel(ABC):
                 if layer_name:
                     name_elem.insert(insert_index, layer_name)
                 updated_name = '/'.join(name_elem)
-                #print("Updated name: ",updated_name)
+                # print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
                 layer_param_dict[updated_name] = value
 
