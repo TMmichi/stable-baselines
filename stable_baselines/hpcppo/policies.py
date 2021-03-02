@@ -81,6 +81,7 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
             weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
+            #weight_cutoff = tf.Print(weight_cutoff, [weight_cutoff,], 'weight cutoff'+str(i), summarize=-1)
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
@@ -154,6 +155,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         self.reg_weight = reg_weight
         self.activ_fn = act_fun
         self._neglogp = 0
+        self.squash = True
 
 
     def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi", loaded=False):
@@ -177,13 +179,16 @@ class HPCPPOPolicy(ActorCriticPolicy):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
+        # logp_pi = tf.Print(logp_pi, [logp_pi,], "logp_pi value: ", summarize=-1) #-1.83 ~ -1.84
+
         self.entropy = gaussian_entropy(log_std_MCP)
         self.std = tf.exp(log_std_MCP)
         
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         weight_val = [self.weight[name] for name in self.weight.keys()]
-        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
+        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, tf.tanh(pi_MCP), weight_val], "mu, std, pi, squashed, weight: ", summarize=-1)
+        
         self._neglogp = -logp_pi
         self._policy = policy
         self.deterministic_policy = deterministic_policy
@@ -329,12 +334,17 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
                         # if aux, then the produced action becomes scaled
                         # TODO(tmmichi): constant action scale with 0.1 does not represent same effect after being squashed
-                        mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)                        
+                        mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)
+                        
+                        # NOTE(tmmichi): Logging
+                        # mu_ = tf.Print(mu_, [mu_,], name+' act', summarize=-1)
+                        # mu_ = tf.Print(mu_, [tf.tanh(mu_)], name+' tanact', summarize=-1)
 
                         if not non_log:
                             log_std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None)
                         else:
                             std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='relu') + EPS
+                            # std = tf.Print(std, [std,], name+" std", summarize=-1)
                             log_std = tf.log(std)
 
                         mu_array.append(mu_)
@@ -468,9 +478,6 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})
-    
-    def kl(self, other):
-        return self.dist.kl_divergence(other.dist)
     
     def get_logstd(self, obs):
         obs = np.array(obs)

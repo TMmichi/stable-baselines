@@ -199,9 +199,12 @@ class HPCPPO(ActorCriticRLModel):
                         self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
 
                         ratio = tf.exp(self.old_neglog_pac_ph - neglogpac)
+                        self.ratio_chk = ratio
                         pg_losses = -self.advs_ph * ratio
                         pg_losses2 = -self.advs_ph * tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 +
                                                                     self.clip_range_ph)
+                        self.pg_uncut = pg_losses
+                        self.pg_cut = pg_losses2
                         self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
                         self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
                         self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
@@ -274,7 +277,7 @@ class HPCPPO(ActorCriticRLModel):
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, update,
-                    writer, states=None, cliprange_vf=None):
+                    writer, states=None, cliprange_vf=None, same_epoch=False):
         """
         Training of PPO2 Algorithm
 
@@ -324,13 +327,24 @@ class HPCPPO(ActorCriticRLModel):
                 # summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 #     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
                 #     td_map)
-                policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                    [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],td_map)
-                print('policy_loss: ',policy_loss)
-                print('value_loss: ',value_loss)
-                print('policy_entropy: ',policy_entropy)
-                print('approxkl: ',approxkl)
-                print('clipfrac: ',clipfrac)
+                # ratio_chk = self.sess.run([self.ratio_chk], td_map)
+                # print('ratio_chk: ',ratio_chk)
+                if same_epoch:
+                    tm_neglogp = self.sess.run([self.train_model.neglogp], td_map)    
+                    print("tm_neglogp: ", tm_neglogp)
+                    print("old_neglogp: ", neglogpacs)
+
+                policy_loss, pg_uncut, pg_cut, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
+                    [self.pg_loss, self.pg_uncut, self.pg_cut, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],td_map)
+                if same_epoch:
+                    # print('policy_loss: ',policy_loss)
+                    # print('pg uncut: ',pg_uncut)
+                    # print('pg cut: ',pg_cut)
+                    # print('value_loss: ',value_loss)
+                    # print('policy_entropy: ',policy_entropy)
+                    # print('approxkl: ',approxkl)
+                    # print('clipfrac: ',clipfrac)
+                    pass
             # writer.add_summary(summary, (update * update_fac))
         else:
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
@@ -390,14 +404,17 @@ class HPCPPO(ActorCriticRLModel):
                     print("############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(inds)
+                        print('inds afer shuffling: ',inds)
                         for start in range(0, self.n_batch, batch_size):
                             timestep = self.num_timesteps // update_fac + ((epoch_num *
                                                                             self.n_batch + start) // batch_size)
                             end = start + batch_size
                             mbinds = inds[start:end]
+                            print('mbinds: ', mbinds)
+                            same_epoch = True if 0 in mbinds else False
                             slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
-                                                                 update=timestep, cliprange_vf=cliprange_vf_now))
+                                                                 update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=same_epoch))
                 else:  # recurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs // self.n_steps, 1)
                     assert self.n_envs % self.nminibatches == 0
@@ -532,6 +549,7 @@ class Runner(AbstractEnvRunner):
         ep_infos = []
         for iteration in range(self.n_steps):
             # action from the act_model
+            subgoal, weight = None, None
             # actions, values, neglogpacs = self.model.step(self.obs, self.states, self.dones)
             actions, subgoal, weight, values, neglogpacs = self.model.subgoal_step(self.obs, self.states, self.dones)
 
