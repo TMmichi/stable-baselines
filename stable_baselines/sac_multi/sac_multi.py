@@ -697,8 +697,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     subgoal = None
                 else:
                     # NOTE: non_subgoal
-                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    # weight = subgoal = None
+                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    weight = subgoal = None
                     # NOTE: subgoal
                     action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
 
@@ -715,7 +715,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal)
+                new_obs, reward, done, info = self.env.step(unscaled_action)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
