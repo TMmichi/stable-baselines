@@ -330,21 +330,13 @@ class HPCPPO(ActorCriticRLModel):
                 # ratio_chk = self.sess.run([self.ratio_chk], td_map)
                 # print('ratio_chk: ',ratio_chk)
                 if same_epoch:
-                    tm_neglogp = self.sess.run([self.train_model.neglogp], td_map)    
+                    tm_neglogp = self.sess.run([self.train_model.neglogp], td_map)
                     print("tm_neglogp: ", tm_neglogp)
                     print("old_neglogp: ", neglogpacs)
 
                 policy_loss, pg_uncut, pg_cut, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                     [self.pg_loss, self.pg_uncut, self.pg_cut, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],td_map)
-                if same_epoch:
-                    # print('policy_loss: ',policy_loss)
-                    # print('pg uncut: ',pg_uncut)
-                    # print('pg cut: ',pg_cut)
-                    # print('value_loss: ',value_loss)
-                    # print('policy_entropy: ',policy_entropy)
-                    # print('approxkl: ',approxkl)
-                    # print('clipfrac: ',clipfrac)
-                    pass
+
             # writer.add_summary(summary, (update * update_fac))
         else:
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
@@ -409,10 +401,10 @@ class HPCPPO(ActorCriticRLModel):
                             timestep = self.num_timesteps // update_fac + ((epoch_num *
                                                                             self.n_batch + start) // batch_size)
                             end = start + batch_size
-                            mbinds = inds[start:end]
-                            print('mbinds: ', mbinds)
-                            same_epoch = True if 0 in mbinds else False
-                            slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                            mb_inds = inds[start:end]
+                            print('mb_inds: ', mb_inds)
+                            same_epoch = True if (inds[0] in mb_inds and epoch_num == 0) else False
+                            slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
                                                                  update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=same_epoch))
                 else:  # recurrent version
