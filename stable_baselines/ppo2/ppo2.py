@@ -145,6 +145,7 @@ class PPO2(ActorCriticRLModel):
                     self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
                     neglogpac = train_model.proba_distribution.neglogp(self.action_ph)
+                    self.neglogp = neglogpac
                     self.entropy = tf.reduce_mean(train_model.proba_distribution.entropy())
 
                     vpred = train_model.value_flat
@@ -244,7 +245,7 @@ class PPO2(ActorCriticRLModel):
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, update,
-                    writer, states=None, cliprange_vf=None):
+                    writer, states=None, cliprange_vf=None, same_epoch=False):
         """
         Training of PPO2 Algorithm
 
@@ -291,6 +292,11 @@ class PPO2(ActorCriticRLModel):
                     td_map, options=run_options, run_metadata=run_metadata)
                 writer.add_run_metadata(run_metadata, 'step%d' % (update * update_fac))
             else:
+                if same_epoch:
+                    tm_neglogp = self.sess.run([self.neglogp], td_map)
+                    print("tm_neglogp: ", tm_neglogp)
+                    print("old_neglogp: ", neglogpacs)
+
                 summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
                     td_map)
@@ -350,6 +356,7 @@ class PPO2(ActorCriticRLModel):
                 if states is None:  # nonrecurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs, 1)
                     inds = np.arange(self.n_batch)
+                    print("############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(inds)
                         for start in range(0, self.n_batch, batch_size):
@@ -357,9 +364,10 @@ class PPO2(ActorCriticRLModel):
                                                                             self.n_batch + start) // batch_size)
                             end = start + batch_size
                             mbinds = inds[start:end]
+                            same_epoch = True if (inds[0] in mbinds and epoch_num == 0) else False
                             slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
-                                                                 update=timestep, cliprange_vf=cliprange_vf_now))
+                                                                 update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=same_epoch))
                 else:  # recurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs // self.n_steps, 1)
                     assert self.n_envs % self.nminibatches == 0

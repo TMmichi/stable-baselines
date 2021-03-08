@@ -177,15 +177,16 @@ class HPCPPOPolicy(ActorCriticPolicy):
             obs = self.processed_obs
         with tf.variable_scope(scope, reuse=reuse):
             pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-
+        self._mu = pi_MCP
+        self._log_std = log_std_MCP
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
-        # logp_pi = tf.Print(logp_pi, [logp_pi,], "logp_pi value: ", summarize=-1) #-1.83 ~ -1.84
 
         self.entropy = gaussian_entropy(log_std_MCP)
         self.std = tf.exp(log_std_MCP)
         
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        # logp_pi = tf.Print(logp_pi, [logp_pi, policy], "logp_pi value, pi: ", summarize=-1) #-1.83 ~ -1.84
         weight_val = [self.weight[name] for name in self.weight.keys()]
         # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, tf.tanh(pi_MCP), weight_val], "mu, std, pi, squashed, weight: ", summarize=-1)
         
@@ -484,6 +485,11 @@ class HPCPPOPolicy(ActorCriticPolicy):
         obs = obs.reshape((-1,) + obs.shape)
         logstd = tf.log(self.std)
         return self.sess.run([logstd], {self.obs_ph: obs})
+    
+    def neglogp_call(self, x):
+        logp_pi = gaussian_likelihood(x, self._mu, self._log_std)
+        _, _, logp_pi = apply_squashing_func(self._mu, x, logp_pi)
+        return -logp_pi
 
 
 class CnnPolicy(HPCPPOPolicy):

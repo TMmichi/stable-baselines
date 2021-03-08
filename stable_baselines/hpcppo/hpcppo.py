@@ -151,12 +151,12 @@ class HPCPPO(ActorCriticRLModel):
 
                             train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                                     self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
-                                                    reuse=True, add_action_ph=False, **self.policy_kwargs)
+                                                    reuse=True, add_action_ph=True, **self.policy_kwargs)
                             train_model.make_HPC_actor(train_model.obs_ph, primitives, self.tails, self.action_space.shape[0], reuse=True)
                             train_model.make_HPC_critics(train_model.obs_ph, None, primitives, self.tails, reuse=True)
 
                     with tf.variable_scope("loss", reuse=False):
-                        # self.action_ph = train_model.action_ph
+                        self.action_ph = train_model.action_ph
                         self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
                         self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
                         self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
@@ -164,7 +164,8 @@ class HPCPPO(ActorCriticRLModel):
                         self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
                         self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
-                        neglogpac = train_model.neglogp
+                        neglogpac = train_model.neglogp_call(self.action_ph)
+                        self.neglogpac = neglogpac
                         self.entropy = tf.reduce_mean(train_model.entropy)
 
                         vpred = train_model.value_flat
@@ -298,7 +299,7 @@ class HPCPPO(ActorCriticRLModel):
         """
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-        td_map = {self.train_model.obs_ph: obs,
+        td_map = {self.train_model.obs_ph: obs, self.action_ph: actions,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.learning_rate_ph: learning_rate, self.clip_range_ph: cliprange,
                   self.old_neglog_pac_ph: neglogpacs, self.old_vpred_ph: values}
@@ -330,7 +331,8 @@ class HPCPPO(ActorCriticRLModel):
                 # ratio_chk = self.sess.run([self.ratio_chk], td_map)
                 # print('ratio_chk: ',ratio_chk)
                 if same_epoch:
-                    tm_neglogp = self.sess.run([self.train_model.neglogp], td_map)
+                    tm_neglogp = self.sess.run([self.neglogpac], td_map)
+                    print("pi: ", actions)
                     print("tm_neglogp: ", tm_neglogp)
                     print("old_neglogp: ", neglogpacs)
 
@@ -342,7 +344,8 @@ class HPCPPO(ActorCriticRLModel):
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train], td_map)
 
-        return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
+        #return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
+        return 0, 0, 0, 0, 0
 
     def learn(self, total_timesteps, loaded_step_num=0, callback=None, log_interval=1, tb_log_name="PPO2",
               reset_num_timesteps=True, save_interval=0, save_path=None):
@@ -395,8 +398,9 @@ class HPCPPO(ActorCriticRLModel):
                     inds = np.arange(self.n_batch)
                     print("############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
-                        np.random.shuffle(inds)
-                        print('inds afer shuffling: ',inds)
+                        print('inds no shuffling: ',inds)
+                        # np.random.shuffle(inds)
+                        # print('inds afer shuffling: ',inds)
                         for start in range(0, self.n_batch, batch_size):
                             timestep = self.num_timesteps // update_fac + ((epoch_num *
                                                                             self.n_batch + start) // batch_size)
