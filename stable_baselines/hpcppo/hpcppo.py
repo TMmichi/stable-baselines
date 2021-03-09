@@ -108,7 +108,7 @@ class HPCPPO(ActorCriticRLModel):
     def setup_model(self):
         pass
 
-    def setup_HPC_model(self, primitives, load_value=True):
+    def setup_HPC_model(self, primitives):
         with SetVerbosity(self.verbose):
 
             assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the HPCPPO model must be " \
@@ -142,13 +142,12 @@ class HPCPPO(ActorCriticRLModel):
                 else:
                     with tf.variable_scope('model'):
                         act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
-                                            n_batch_step, reuse=False, **self.policy_kwargs)
+                                            n_batch_step, reuse=False, add_action_ph=True, **self.policy_kwargs)
                         act_model.make_HPC_actor(act_model.obs_ph, primitives, self.tails, self.action_space.shape[0], reuse=False)
                         act_model.make_HPC_critics(act_model.obs_ph, None, primitives, self.tails, reuse=False)
 
                         with tf.variable_scope("train_model", reuse=True,
                                             custom_getter=tf_util.outer_scope_getter("train_model")):
-
                             train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                                     self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
                                                     reuse=True, add_action_ph=True, **self.policy_kwargs)
@@ -164,8 +163,11 @@ class HPCPPO(ActorCriticRLModel):
                         self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
                         self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
-                        neglogpac = train_model.neglogp_call(self.action_ph)
-                        self.neglogpac = neglogpac
+                        neglogpac_tm = train_model.neglogp_call(self.action_ph)
+                        neglogpac_am = act_model.neglogp_call(self.action_ph)
+                        self.neglogpac_tm = neglogpac_tm
+                        self.neglogpac_am = neglogpac_am
+
                         self.entropy = tf.reduce_mean(train_model.entropy)
 
                         vpred = train_model.value_flat
@@ -199,7 +201,7 @@ class HPCPPO(ActorCriticRLModel):
                         vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
                         self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
 
-                        ratio = tf.exp(self.old_neglog_pac_ph - neglogpac)
+                        ratio = tf.exp(self.old_neglog_pac_ph - neglogpac_tm)
                         self.ratio_chk = ratio
                         pg_losses = -self.advs_ph * ratio
                         pg_losses2 = -self.advs_ph * tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 +
@@ -207,7 +209,7 @@ class HPCPPO(ActorCriticRLModel):
                         self.pg_uncut = pg_losses
                         self.pg_cut = pg_losses2
                         self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
-                        self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
+                        self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac_tm - self.old_neglog_pac_ph))
                         self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
                                                                         self.clip_range_ph), tf.float32))
                         loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
@@ -221,17 +223,17 @@ class HPCPPO(ActorCriticRLModel):
 
                         # with tf.variable_scope('model'):
                         #     self.params = tf.trainable_variables()
-                        #     self.trainable_params = 
                         #     if self.full_tensorboard_log:
                         #         for var in self.params:
                         #             tf.summary.histogram(var.name, var)
                         self.params = tf_util.get_trainable_vars('model')
-                        self.trainable_params = []
-                        for var in self.params:
-                            if self.full_tensorboard_log:
-                                tf.summary.histogram(var.name, var)
-                            if 'train' in var.name.split('/'):
-                                self.trainable_params.append(var)
+                        with tf.variable_scope('model'):
+                            self.trainable_params = []
+                            for var in self.params:
+                                if self.full_tensorboard_log:
+                                    tf.summary.histogram(var.name, var)
+                                if 'train' in var.name.split('/'):
+                                    self.trainable_params.append(var)
                             
                         grads = tf.gradients(loss, self.trainable_params)
                         if self.max_grad_norm is not None:
@@ -274,7 +276,6 @@ class HPCPPO(ActorCriticRLModel):
                 self.value = act_model.value
                 self.initial_state = act_model.initial_state
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
-
                 self.summary = tf.summary.merge_all()
 
     def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, update,
@@ -299,7 +300,7 @@ class HPCPPO(ActorCriticRLModel):
         """
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-        td_map = {self.train_model.obs_ph: obs, self.action_ph: actions,
+        td_map = {self.act_model.obs_ph: obs, self.train_model.obs_ph: obs, self.action_ph: actions,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.learning_rate_ph: learning_rate, self.clip_range_ph: cliprange,
                   self.old_neglog_pac_ph: neglogpacs, self.old_vpred_ph: values}
@@ -325,17 +326,17 @@ class HPCPPO(ActorCriticRLModel):
                     td_map, options=run_options, run_metadata=run_metadata)
                 writer.add_run_metadata(run_metadata, 'step%d' % (update * update_fac))
             else:
-                if same_epoch:
+                # if same_epoch:
                     # ratio_chk = self.sess.run([self.ratio_chk], td_map)
                     # print('ratio_chk: ',ratio_chk)
-                    tm_neglogp = self.sess.run([self.neglogpac], td_map)
-                    print("runtime pi: ", actions)
-                    print("tm_neglogp: ", tm_neglogp)
-                    print("old_neglogp: ", neglogpacs)
+                tm_neglogp, am_neglogp = self.sess.run([self.neglogpac_tm, self.neglogpac_am], td_map)
+                print("tm_neglogp: ", tm_neglogp)
+                print("am_neglogp: ", am_neglogp)
+                print("old_neglogp: ", neglogpacs)
 
-                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
-                    td_map)
+                # summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
+                #     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
+                #     td_map)
                 # policy_loss, pg_uncut, pg_cut, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 #     [self.pg_loss, self.pg_uncut, self.pg_cut, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],td_map)
 
@@ -344,7 +345,8 @@ class HPCPPO(ActorCriticRLModel):
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train], td_map)
 
-        return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
+        # return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
+        return 0,0,0,0,0
 
     def learn(self, total_timesteps, loaded_step_num=0, callback=None, log_interval=1, tb_log_name="PPO2",
               reset_num_timesteps=True, save_interval=0, save_path=None):
@@ -397,19 +399,23 @@ class HPCPPO(ActorCriticRLModel):
                     inds = np.arange(self.n_batch)
                     print("############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
-                        # print('inds no shuffling: ',inds)
                         # np.random.shuffle(inds)
-                        # print('inds afer shuffling: ',inds)
-                        for start in range(0, self.n_batch, batch_size):
+                        # for start in range(0, self.n_batch, batch_size):
+                        #     timestep = self.num_timesteps // update_fac + ((epoch_num *
+                        #                                                     self.n_batch + start) // batch_size)
+                        #     end = start + batch_size
+                        #     mb_inds = inds[start:end]
+                        #     # print('mb_inds: ', mb_inds)
+                        #     same_epoch = True if (inds[0] in mb_inds and epoch_num == 0) else False
+                        #     slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                        #     mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
+                        #                                          update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=same_epoch))
+                        for start in range(0, 10):
                             timestep = self.num_timesteps // update_fac + ((epoch_num *
                                                                             self.n_batch + start) // batch_size)
-                            end = start + batch_size
-                            mb_inds = inds[start:end]
-                            # print('mb_inds: ', mb_inds)
-                            same_epoch = True if (inds[0] in mb_inds and epoch_num == 0) else False
-                            slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                            slices = (arr[0:1] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
-                                                                 update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=same_epoch))
+                                                                 update=timestep, cliprange_vf=cliprange_vf_now, same_epoch=True))
                 else:  # recurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs // self.n_steps, 1)
                     assert self.n_envs % self.nminibatches == 0

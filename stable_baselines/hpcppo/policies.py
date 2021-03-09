@@ -23,8 +23,8 @@ def gaussian_likelihood(input_, mu_, log_std):
     :param log_std: (tf.Tensor)
     :return: (tf.Tensor)
     """
+    
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    # pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
     # pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
@@ -42,7 +42,7 @@ def clip_but_pass_gradient(input_, lower=-1., upper=1.):
     clip_low = tf.cast(input_ < lower, tf.float32)
     return input_ + tf.stop_gradient((upper - input_) * clip_up + (lower - input_) * clip_low)
 
-def apply_squashing_func(mu_, pi_, logp_pi, call=False):
+def apply_squashing_func(mu_, pi_, logp_pi):
     """
     Squash the output of the Gaussian distribution
     and account for that in the log probability
@@ -56,11 +56,7 @@ def apply_squashing_func(mu_, pi_, logp_pi, call=False):
     """
     # Squash the output
     deterministic_policy = tf.tanh(mu_)
-    if not call:
-        policy = tf.tanh(pi_)
-    else:
-        policy = pi_
-    print("at update time",deterministic_policy, pi_)
+    policy = tf.tanh(pi_)
     
     # OpenAI Variation:
     # To avoid evil machine precision error, strictly clip 1-pi**2 to [0,1] range.
@@ -69,7 +65,7 @@ def apply_squashing_func(mu_, pi_, logp_pi, call=False):
     # logp_pi -= tf.reduce_sum(tf.log(1 - policy ** 2 + EPS), axis=1)
     return deterministic_policy, policy, logp_pi
 
-def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension):
+def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension, reuse=False):
     """
     Fuse distributions of policy into a MCP fashion
 
@@ -82,11 +78,12 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     """
     # task_list = ['aux','reach','grasp']
     task_list = ['reach','grasp']
-    with tf.variable_scope("fuse"):
+    with tf.variable_scope("fuse", reuse=reuse):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
             weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
             #weight_cutoff = tf.Print(weight_cutoff, [weight_cutoff,], 'weight cutoff'+str(i), summarize=-1)
+            # NOTE 4
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
@@ -192,8 +189,9 @@ class HPCPPOPolicy(ActorCriticPolicy):
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         logp_pi = tf.Print(logp_pi, [deterministic_policy, ], "mu at run time: ", summarize=-1)
+        logp_pi = tf.Print(logp_pi, [self.std, ], "std at run time: ", summarize=-1)
         # logp_pi = tf.Print(logp_pi, [logp_pi, policy], "logp_pi value, pi: ", summarize=-1) #-1.83 ~ -1.84
-        weight_val = [self.weight[name] for name in self.weight.keys()]
+        # weight_val = [self.weight[name] for name in self.weight.keys()]
         # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, tf.tanh(pi_MCP), weight_val], "mu, std, pi, squashed, weight: ", summarize=-1)
         
         self._neglogp = -logp_pi
@@ -232,8 +230,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         print("Received tails in actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
-
-        obs = tf.Print(obs, [obs,], 'obs: ',summarize=-1)
+            
         mu_array = []
         log_std_array = []
         act_index = []
@@ -378,7 +375,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         
         assert not isinstance(weight, type(None)), \
             '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
-        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension, reuse)
         
         return pi_MCP, mu_MCP, log_std_MCP
   
@@ -496,8 +493,10 @@ class HPCPPOPolicy(ActorCriticPolicy):
         return self.sess.run([logstd], {self.obs_ph: obs})
     
     def neglogp_call(self, x):
+        x = tf.math.atanh(x)
         logp_pi = gaussian_likelihood(x, self._mu, self._log_std)
-        mu, pi, logp_pi = apply_squashing_func(self._mu, x, logp_pi, call=True)
+        mu, pi, logp_pi = apply_squashing_func(self._mu, x, logp_pi)
+        logp_pi = tf.Print(logp_pi, [tf.exp(self._log_std),], 'std at update time: ', summarize=-1)
         logp_pi = tf.Print(logp_pi, [mu,], 'mu at update time: ', summarize=-1)
         logp_pi = tf.Print(logp_pi, [pi,], 'pi at update time: ', summarize=-1)
         return -logp_pi
