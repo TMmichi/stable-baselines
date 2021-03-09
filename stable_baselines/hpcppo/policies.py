@@ -42,7 +42,7 @@ def clip_but_pass_gradient(input_, lower=-1., upper=1.):
     clip_low = tf.cast(input_ < lower, tf.float32)
     return input_ + tf.stop_gradient((upper - input_) * clip_up + (lower - input_) * clip_low)
 
-def apply_squashing_func(mu_, pi_, logp_pi):
+def apply_squashing_func(mu_, pi_, logp_pi, call=False):
     """
     Squash the output of the Gaussian distribution
     and account for that in the log probability
@@ -56,7 +56,12 @@ def apply_squashing_func(mu_, pi_, logp_pi):
     """
     # Squash the output
     deterministic_policy = tf.tanh(mu_)
-    policy = tf.tanh(pi_)
+    if not call:
+        policy = tf.tanh(pi_)
+    else:
+        policy = pi_
+    print("at update time",deterministic_policy, pi_)
+    
     # OpenAI Variation:
     # To avoid evil machine precision error, strictly clip 1-pi**2 to [0,1] range.
     logp_pi -= tf.reduce_sum(tf.log(clip_but_pass_gradient(1 - policy ** 2, lower=0, upper=1) + EPS), axis=1)
@@ -186,6 +191,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
+        logp_pi = tf.Print(logp_pi, [deterministic_policy, ], "mu at run time: ", summarize=-1)
         # logp_pi = tf.Print(logp_pi, [logp_pi, policy], "logp_pi value, pi: ", summarize=-1) #-1.83 ~ -1.84
         weight_val = [self.weight[name] for name in self.weight.keys()]
         # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, tf.tanh(pi_MCP), weight_val], "mu, std, pi, squashed, weight: ", summarize=-1)
@@ -227,6 +233,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         if obs is None:
             obs = self.processed_obs
 
+        obs = tf.Print(obs, [obs,], 'obs: ',summarize=-1)
         mu_array = []
         log_std_array = []
         act_index = []
@@ -239,6 +246,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
                 prim_dict = primitives[name]
                 layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
                 with tf.variable_scope(layer_name, reuse=reuse):
+                    print("reuse in ",layer_name,": ", reuse)
                     if self.feature_extraction == "cnn":
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
                         raise NotImplementedError("Image input not supported for now")
@@ -290,6 +298,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
                 if 'weight' not in name.split('/'):
                     print('\tGraph of ' + name + ' initializing...')
                     with tf.variable_scope(layer_name, reuse=reuse):
+                        print("reuse in ",layer_name,": ", reuse)
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
                             raise NotImplementedError("Image input not supported for now")
@@ -488,7 +497,9 @@ class HPCPPOPolicy(ActorCriticPolicy):
     
     def neglogp_call(self, x):
         logp_pi = gaussian_likelihood(x, self._mu, self._log_std)
-        _, _, logp_pi = apply_squashing_func(self._mu, x, logp_pi)
+        mu, pi, logp_pi = apply_squashing_func(self._mu, x, logp_pi, call=True)
+        logp_pi = tf.Print(logp_pi, [mu,], 'mu at update time: ', summarize=-1)
+        logp_pi = tf.Print(logp_pi, [pi,], 'pi at update time: ', summarize=-1)
         return -logp_pi
 
 
