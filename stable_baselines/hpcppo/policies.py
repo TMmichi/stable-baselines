@@ -10,7 +10,7 @@ EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 5
 LOG_STD_MIN = -5
-debug = False
+logger = False
 
 
 def gaussian_likelihood(input_, mu_, log_std):
@@ -23,9 +23,12 @@ def gaussian_likelihood(input_, mu_, log_std):
     :param log_std: (tf.Tensor)
     :return: (tf.Tensor)
     """
-    
+    if logger:
+        mu_ = tf.Print(mu_,[mu_,],'\tmu_: ', summarize=-1)
+        mu_ = tf.Print(mu_,[input_,],'\tinput_: ', summarize=-1)
+        mu_ = tf.Print(mu_,[tf.exp(log_std),],'\tstd: ', summarize=-1)
+        mu_ = tf.Print(mu_,[(input_ - mu_) / (tf.exp(log_std) + EPS),],'\tcalced: ', summarize=-1)
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    # pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 def gaussian_entropy(log_std):
@@ -95,10 +98,12 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             std_sum += tf.matmul(normed_weight_index, shaper)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
+        if logger:
+            mu_MCP = tf.Print(mu_MCP, [mu_MCP,], 'weighted mu: ', summarize=-1)
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
+
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
-        # pi_MCP = mu_MCP
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -160,7 +165,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
         self.squash = True
 
 
-    def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi", loaded=False):
+    def make_HPC_actor(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, scope="pi", loaded=False, name=None):
         """
         Creates a HPC actor object
 
@@ -178,19 +183,18 @@ class HPCPPOPolicy(ActorCriticPolicy):
         if obs is None:
             obs = self.processed_obs
         with tf.variable_scope(scope, reuse=reuse):
-            pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-        self._mu = pi_MCP
+            pi_MCP, mu_MCP, log_std_MCP = self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log, name)
+        self._mu = mu_MCP
         self._log_std = log_std_MCP
+        self._pi = pi_MCP
+
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
+        # policies with squashing func at test time
+        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
 
         self.entropy = gaussian_entropy(log_std_MCP)
         self.std = tf.exp(log_std_MCP)
-        
-        # policies with squashing func at test time
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
-        logp_pi = tf.Print(logp_pi, [deterministic_policy, ], "mu at run time: ", summarize=-1)
-        logp_pi = tf.Print(logp_pi, [self.std, ], "std at run time: ", summarize=-1)
-        # logp_pi = tf.Print(logp_pi, [logp_pi, policy], "logp_pi value, pi: ", summarize=-1) #-1.83 ~ -1.84
+
         # weight_val = [self.weight[name] for name in self.weight.keys()]
         # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, tf.tanh(pi_MCP), weight_val], "mu, std, pi, squashed, weight: ", summarize=-1)
         
@@ -226,7 +230,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
         return self.qf, self._value_fn
 
-    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
+    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False, modelname=None):
         print("Received tails in actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -258,13 +262,15 @@ class HPCPPOPolicy(ActorCriticPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
+                    if logger:
+                        weight = tf.Print(weight, [weight,], modelname+' weight: ',summarize=-1)
                     self.weight[name] = weight
                     
                     subgoal_dict = {}
                     if prim_dict.get('subgoal', None) is not None:
                         for prim_name, obs_idx in prim_dict['subgoal'].items():
                             assert prim_name in tails, "\n\t\033[91m[ERROR]: name of the target primitive not in tails or does not match\033[0m"
-                            with tf.variable_scope('subgoal_'+prim_name, reuse=False):
+                            with tf.variable_scope('subgoal_'+prim_name, reuse=reuse):
                                 # NOTE(tmmichi): restriction(bounds) on subgoal.
                                 subgoal_obs = tf.layers.dense(pi_h, len(obs_idx), activation='tanh') * 0.3
                                 self.subgoal[prim_name] = subgoal_obs
@@ -343,9 +349,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
                         # TODO(tmmichi): constant action scale with 0.1 does not represent same effect after being squashed
                         mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)
                         
-                        # NOTE(tmmichi): Logging
-                        # mu_ = tf.Print(mu_, [mu_,], name+' act', summarize=-1)
-                        # mu_ = tf.Print(mu_, [tf.tanh(mu_)], name+' tanact', summarize=-1)
+                        if logger:
+                            mu_ = tf.Print(mu_, [mu_,], name+' act '+modelname, summarize=-1)
 
                         if not non_log:
                             log_std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None)
@@ -463,16 +468,16 @@ class HPCPPOPolicy(ActorCriticPolicy):
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self.value_flat, self.neglogp], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self.value_flat, self.neglogp], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self._pi, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self._pi, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def value(self, obs, state=None, mask=None):
         return self.sess.run(self.value_flat, {self.obs_ph: obs})
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self._pi, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self._pi, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
@@ -493,12 +498,10 @@ class HPCPPOPolicy(ActorCriticPolicy):
         return self.sess.run([logstd], {self.obs_ph: obs})
     
     def neglogp_call(self, x):
-        x = tf.math.atanh(x)
         logp_pi = gaussian_likelihood(x, self._mu, self._log_std)
+        if logger:
+            logp_pi = tf.Print(logp_pi,[logp_pi,],"logp_pi in neglogp call: ", summarize=-1)
         mu, pi, logp_pi = apply_squashing_func(self._mu, x, logp_pi)
-        logp_pi = tf.Print(logp_pi, [tf.exp(self._log_std),], 'std at update time: ', summarize=-1)
-        logp_pi = tf.Print(logp_pi, [mu,], 'mu at update time: ', summarize=-1)
-        logp_pi = tf.Print(logp_pi, [pi,], 'pi at update time: ', summarize=-1)
         return -logp_pi
 
 
