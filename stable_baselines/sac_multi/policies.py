@@ -324,8 +324,9 @@ class FeedForwardPolicy(SACPolicy):
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
                 # pi_h = tf.layers.flatten(obs)
+                new_obs = tf.Print(new_obs, [new_obs,], 'subs obs', summarize=-1)
                 pi_h = tf.layers.flatten(new_obs)
-
+            pi_h = tf.Print(pi_h, [pi_h,], 'obs: ', summarize=-1)
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
             self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)

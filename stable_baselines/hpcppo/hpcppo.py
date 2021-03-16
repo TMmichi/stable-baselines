@@ -13,7 +13,6 @@ from stable_baselines.common.tf_util import total_episode_reward_logger
 from stable_baselines.common.math_util import safe_mean, unscale_action
 
 
-test = False
 
 class HPCPPO(ActorCriticRLModel):
     """
@@ -235,8 +234,8 @@ class HPCPPO(ActorCriticRLModel):
                         if self.max_grad_norm is not None:
                             grads, _grad_norm = tf.clip_by_global_norm(grads, self.max_grad_norm)
                         grads = list(zip(grads, self.trainable_params))
-                    for g in grads:
-                        tf.summary.histogram("%s-grad" % g[1].name, g[0])
+                    # for g in grads:
+                    #     tf.summary.histogram("%s-grad" % g[1].name, g[0])
                     trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-5)
                     self._train = trainer.apply_gradients(grads)
 
@@ -268,8 +267,7 @@ class HPCPPO(ActorCriticRLModel):
                     self.train_model = train_model
                 self.act_model = act_model
                 self.step = act_model.step
-                if not test:
-                    self.subgoal_step = act_model.subgoal_step
+                self.subgoal_step = act_model.subgoal_step
                 self.proba_step = act_model.proba_step
                 self.logstd = act_model.get_logstd
                 self.value = act_model.value
@@ -332,7 +330,7 @@ class HPCPPO(ActorCriticRLModel):
                 print("\nEpoch: ", epoch)
                 tm, am = self.sess.run([self.neglogpac_tm, self.neglogpac_am], td_map)
                 print("train model neglog policy: ", tm)
-                print("\nactor model neglog policy: ", am)
+                # print("\nactor model neglog policy: ", am)
                 print('\nneglog policy at runtime: ', neglogpacs)
             if epoch > 0:
                 writer.add_summary(summary, (update * update_fac))
@@ -396,13 +394,12 @@ class HPCPPO(ActorCriticRLModel):
                     inds = np.arange(self.n_batch)
                     print("\n\n\n\n\n\n\n\n\n\n\n\n############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
-                        # np.random.shuffle(inds)
+                        np.random.shuffle(inds)
                         for start in range(0, self.n_batch, batch_size):
                             timestep = self.num_timesteps // update_fac + ((epoch_num *
                                                                             self.n_batch + start) // batch_size)
                             end = start + batch_size
                             mb_inds = inds[start:end]
-                            # same_epoch = True if (inds[0] in mb_inds and epoch_num == 0) else False
                             slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
                                                                  update=timestep, cliprange_vf=cliprange_vf_now, epoch=epoch_num))
@@ -541,26 +538,21 @@ class Runner(AbstractEnvRunner):
         for iteration in range(self.n_steps):
             # action from the act_model
             subgoal, weight = None, None
-            actions, mu, subgoal, weight, values, neglogpacs = self.model.subgoal_step(self.obs, self.states, self.dones)
+            actions, pi, mu, subgoal, weight, values, neglogpacs = self.model.subgoal_step(self.obs, self.states, self.dones)
             mb_obs.append(self.obs.copy())
             # mb_actions.append(actions)
-            mb_actions.append(mu)
+            mb_actions.append(pi)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
 
             # Clip the actions to avoid out of bound error
-            if not test:
-                if self.model.act_model.squash:
-                    if isinstance(self.env.action_space, gym.spaces.Box):
-                        clipped_actions = unscale_action(self.env.action_space, actions)
-                else:
-                    if isinstance(self.env.action_space, gym.spaces.Box):
-                        clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            else:
+            if self.model.act_model.squash:
                 if isinstance(self.env.action_space, gym.spaces.Box):
                     clipped_actions = unscale_action(self.env.action_space, actions)
-
+            else:
+                if isinstance(self.env.action_space, gym.spaces.Box):
+                    clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions, weight=weight, subgoal=subgoal)
 

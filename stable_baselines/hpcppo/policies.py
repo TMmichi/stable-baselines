@@ -1,12 +1,10 @@
-from abc import abstractmethod
-
 import tensorflow as tf
 import numpy as np
 
 from stable_baselines.common.policies import ActorCriticPolicy, nature_cnn, register_policy
 from stable_baselines.common.tf_layers import mlp
 
-EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
+EPS = 1e-7  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 5
 LOG_STD_MIN = -5
@@ -86,7 +84,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         for i in range(len(mu_array)):
             weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
             #weight_cutoff = tf.Print(weight_cutoff, [weight_cutoff,], 'weight cutoff'+str(i), summarize=-1)
-            # NOTE 4
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
@@ -100,6 +97,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
         if logger:
             mu_MCP = tf.Print(mu_MCP, [mu_MCP,], 'weighted mu: ', summarize=-1)
+        # mu_MCP = tf.Print(mu_MCP, [std_MCP,], 'std_MCP: ', summarize=-1)
+
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
 
@@ -259,11 +258,19 @@ class HPCPPOPolicy(ActorCriticPolicy):
                     for i in range(len(prim_dict['obs'][1])):
                         sieve_layer[prim_dict['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
+                    # pi_h = tf.Print(pi_h, [pi_h,], name+' obs: ', summarize=-1)
                     #------------- Observation sieving layer End -------------#
+
+                    # pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, init_bias=-0.3, layer_norm=self.layer_norm)
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
-                    if logger:
-                        weight = tf.Print(weight, [weight,], modelname+' weight: ',summarize=-1)
+
+                    # Test layer
+                    # weightl = tf.layers.dense(pi_h, 1, activation='softmax')
+                    # weight1 = tf.fill(tf.shape(weightl), 1.0)
+                    # weight0 = tf.fill(tf.shape(weightl), 0.0)
+                    # weight = tf.concat([weight1,weight0],1)
+
                     self.weight[name] = weight
                     
                     subgoal_dict = {}
@@ -315,6 +322,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
                             index_pair[prim_dict['obs'][1][i]] = i
                             sieve_layer[prim_dict['obs'][1][i]][i] = 1
                         pi_h = tf.matmul(pi_h, sieve_layer)
+                        # pi_h = tf.Print(pi_h, [pi_h,], name+' obs: ', summarize=-1)
                         #------------- Observation sieving layer End -------------#
 
                         if 'subtract' in prim_dict['obs_relativity'].keys():
@@ -343,6 +351,7 @@ class HPCPPOPolicy(ActorCriticPolicy):
                             else:
                                 pi_h = subs_obs
 
+                        # pi_h = tf.Print(pi_h, [pi_h,], name+' subs obs: ', summarize=-1)
                         pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         # if aux, then the produced action becomes scaled
@@ -359,8 +368,10 @@ class HPCPPOPolicy(ActorCriticPolicy):
                             # std = tf.Print(std, [std,], name+" std", summarize=-1)
                             log_std = tf.log(std)
 
+                        # mu_ = tf.Print(mu_,[mu_],name+" mu:\t", summarize=-1)
                         mu_array.append(mu_)
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
+                        # mu_ = tf.Print(mu_,[tf.exp(log_std)],name+" std:\t", summarize=-1)
                         log_std_array.append(log_std)
                         act_index.append(prim_dict['act'][1])
                         
@@ -476,8 +487,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self._pi, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self._pi, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self._pi, self._mu, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self._pi, self._mu, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})

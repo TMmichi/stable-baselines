@@ -18,7 +18,17 @@ class DummyVecEnv(VecEnv):
     """
 
     def __init__(self, env_fns, args=None):
-        self.envs = [fn(**args) for fn in env_fns]
+        self.envs = []
+        for idx, fn in enumerate(env_fns):
+            print(args['visualize'])
+            if idx == 0 and args['visualize'] == True:
+                self.envs.append(fn(**args))
+            else:
+                args['visualize'] = False
+                self.envs.append(fn(**args))
+        # quit()
+        # self.envs = [fn(**args) for fn in env_fns]
+        self.seed(args['seed'])
         print("list formed")
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
