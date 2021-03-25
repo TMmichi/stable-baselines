@@ -198,7 +198,6 @@ class HPCPPO(ActorCriticRLModel):
                                 tf.clip_by_value(train_model.value_flat - self.old_vpred_ph,
                                                 - self.clip_range_vf_ph, self.clip_range_vf_ph)
 
-
                         vf_losses1 = tf.square(vpred - self.rewards_ph)
                         vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
                         self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
@@ -213,13 +212,17 @@ class HPCPPO(ActorCriticRLModel):
                                                                         self.clip_range_ph), tf.float32))
                         loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
 
-                        tf.summary.scalar('entropy_loss', self.entropy)
-                        tf.summary.scalar('policy_gradient_loss', self.pg_loss)
-                        tf.summary.scalar('ratio', tf.reduce_mean(ratio))
-                        tf.summary.scalar('value_function_loss', self.vf_loss)
-                        tf.summary.scalar('approximate_kullback-leibler', self.approxkl)
-                        tf.summary.scalar('clip_factor', self.clipfrac)
-                        tf.summary.scalar('loss', loss)
+                        tf_summary_dict = \
+                            {
+                                tf.summary.scalar('entropy_loss', self.entropy),
+                                tf.summary.scalar('policy_gradient_loss', self.pg_loss),
+                                tf.summary.scalar('ratio', tf.reduce_mean(ratio)),
+                                tf.summary.scalar('value_function_loss', self.vf_loss),
+                                tf.summary.scalar('approximate_kullback-leibler', self.approxkl),
+                                tf.summary.scalar('clip_factor', self.clipfrac),
+                                tf.summary.scalar('loss', loss)
+                            }
+                        
 
                         self.params = tf_util.get_trainable_vars('model')
                         with tf.variable_scope('model'):
@@ -323,17 +326,15 @@ class HPCPPO(ActorCriticRLModel):
                     td_map, options=run_options, run_metadata=run_metadata)
                 writer.add_run_metadata(run_metadata, 'step%d' % (update * update_fac))
             else:
-                if epoch > 0:
-                    summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                        [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
-                        td_map)
-                print("\nEpoch: ", epoch)
-                tm, am = self.sess.run([self.neglogpac_tm, self.neglogpac_am], td_map)
-                print("train model neglog policy: ", tm)
-                # print("\nactor model neglog policy: ", am)
-                print('\nneglog policy at runtime: ', neglogpacs)
-            if epoch > 0:
-                writer.add_summary(summary, (update * update_fac))
+                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
+                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
+                    td_map)
+                # print("\nEpoch: ", epoch)
+                # tm, am = self.sess.run([self.neglogpac_tm, self.neglogpac_am], td_map)
+                # print("train model neglog policy: ", tm)
+                # # print("\nactor model neglog policy: ", am)
+                # print('\nneglog policy at runtime: ', neglogpacs)
+            writer.add_summary(summary, (update * update_fac))
         else:
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                 [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train], td_map)
@@ -392,7 +393,7 @@ class HPCPPO(ActorCriticRLModel):
                 if states is None:  # nonrecurrent version
                     update_fac = max(self.n_batch // self.nminibatches // self.noptepochs, 1)
                     inds = np.arange(self.n_batch)
-                    print("\n\n\n\n\n\n\n\n\n\n\n\n############################################UPDATER CALL############################################")
+                    print("\n\n\n\n############################################UPDATER CALL############################################")
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(inds)
                         for start in range(0, self.n_batch, batch_size):
@@ -555,6 +556,9 @@ class Runner(AbstractEnvRunner):
                     clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions, weight=weight, subgoal=subgoal)
+            # print("Dummy reward: ", rewards)
+            if self.dones == True:
+                print('DONE, received reward: ', rewards)
 
             self.model.num_timesteps += self.n_envs
 
