@@ -258,19 +258,16 @@ class HPCPPOPolicy(ActorCriticPolicy):
                     for i in range(len(prim_dict['obs'][1])):
                         sieve_layer[prim_dict['obs'][1][i]][i] = 1
                     pi_h = tf.matmul(pi_h, sieve_layer)
-                    # pi_h = tf.Print(pi_h, [pi_h,], name+' obs: ', summarize=-1)
                     #------------- Observation sieving layer End -------------#
 
-                    # pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, init_bias=-0.3, layer_norm=self.layer_norm)
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
-
-                    # Test layer
-                    # weightl = tf.layers.dense(pi_h, 1, activation='softmax')
-                    # weight1 = tf.fill(tf.shape(weightl), 1.0)
-                    # weight0 = tf.fill(tf.shape(weightl), 0.0)
-                    # weight = tf.concat([weight1,weight0],1)
-
+                    # TODO 1: eliminate the softmax activation, and apply sigma*noise 
+                    #                   -> effect of sigma varies with respect to the value of the output.
+                    # TODO 2: calculate the gaussian likelihood
+                    # TODO 3: squash the weight using softmax and apply compensation @ log probability
+                    #                   -> pi(w_sq|s) = mu(w|s)*|det(w_sq/w)|^-1
+                    self.neglog_weight_sum = -tf.reduce_sum(tf.log(weight),axis=-1)
                     self.weight[name] = weight
                     
                     subgoal_dict = {}
@@ -322,7 +319,6 @@ class HPCPPOPolicy(ActorCriticPolicy):
                             index_pair[prim_dict['obs'][1][i]] = i
                             sieve_layer[prim_dict['obs'][1][i]][i] = 1
                         pi_h = tf.matmul(pi_h, sieve_layer)
-                        # pi_h = tf.Print(pi_h, [pi_h,], name+' obs: ', summarize=-1)
                         #------------- Observation sieving layer End -------------#
 
                         if 'subtract' in prim_dict['obs_relativity'].keys():
@@ -357,9 +353,6 @@ class HPCPPOPolicy(ActorCriticPolicy):
                         # if aux, then the produced action becomes scaled
                         # TODO(tmmichi): constant action scale with 0.1 does not represent same effect after being squashed
                         mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)
-                        
-                        if logger:
-                            mu_ = tf.Print(mu_, [mu_,], name+' act '+modelname, summarize=-1)
 
                         if not non_log:
                             log_std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None)
@@ -487,11 +480,14 @@ class HPCPPOPolicy(ActorCriticPolicy):
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self._pi, self._mu, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self._pi, self._mu, self.subgoal, self.weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight_sum, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight_sum, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
+    
+    def get_neglog_weight(self):
+        return self.neglog_weight_sum
 
     def get_primitive_action(self, obs):
         return self.sess.run(self.primitive_actions, {self.obs_ph: obs})
@@ -514,7 +510,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
             logp_pi = tf.Print(logp_pi,[logp_pi,],"logp_pi in neglogp call: ", summarize=-1)
         mu, pi, logp_pi = apply_squashing_func(self._mu, x, logp_pi)
         return -logp_pi
-
+    
+    
 
 class CnnPolicy(HPCPPOPolicy):
     """
