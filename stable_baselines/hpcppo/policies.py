@@ -83,7 +83,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
             weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
-            #weight_cutoff = tf.Print(weight_cutoff, [weight_cutoff,], 'weight cutoff'+str(i), summarize=-1)
             tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
@@ -95,13 +94,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             std_sum += tf.matmul(normed_weight_index, shaper)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
-        if logger:
-            mu_MCP = tf.Print(mu_MCP, [mu_MCP,], 'weighted mu: ', summarize=-1)
-        # mu_MCP = tf.Print(mu_MCP, [std_MCP,], 'std_MCP: ', summarize=-1)
-
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
-
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
     return pi_MCP, mu_MCP, log_std_MCP
@@ -267,7 +261,8 @@ class HPCPPOPolicy(ActorCriticPolicy):
                     # TODO 2: calculate the gaussian likelihood
                     # TODO 3: squash the weight using softmax and apply compensation @ log probability
                     #                   -> pi(w_sq|s) = mu(w|s)*|det(w_sq/w)|^-1
-                    self.neglog_weight_sum = -tf.reduce_sum(tf.log(weight),axis=-1)
+                    # self.neglog_weight_sum = -tf.reduce_sum(tf.log(weight),axis=-1)
+                    self.neglog_weight = -tf.log(weight)
                     self.weight[name] = weight
                     
                     subgoal_dict = {}
@@ -480,14 +475,14 @@ class HPCPPOPolicy(ActorCriticPolicy):
     
     def subgoal_step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
-            return self.sess.run([self.deterministic_policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight_sum, self.value_flat, self.neglogp], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight_sum, self.value_flat, self.neglogp], {self.obs_ph: obs})
+            return self.sess.run([self.deterministic_policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self._pi, self._mu, self.subgoal, self.weight, self.neglog_weight, self.value_flat, self.neglogp], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
     
     def get_neglog_weight(self):
-        return self.neglog_weight_sum
+        return tf.slice(self.neglog_weight, [0, 0], [-1,1])
 
     def get_primitive_action(self, obs):
         return self.sess.run(self.primitive_actions, {self.obs_ph: obs})

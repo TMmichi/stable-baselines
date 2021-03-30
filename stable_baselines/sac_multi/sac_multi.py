@@ -125,7 +125,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
-        self.grad_logger = False
+        self.grad_logger = True
 
         if _init_setup_model:
             self.setup_model()
@@ -343,7 +343,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def setup_HPC_model(self, primitives, load_value=True):
+    def setup_HPC_model(self, primitives):
         with SetVerbosity(self.verbose):
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -457,7 +457,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         # Compute the policy loss
                         # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
                         qf1_pi = tf.reshape(qf1_pi,[-1])
-                        logp_pi_mean = tf.reduce_mean(logp_pi)
                         policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
                         policy_loss = policy_kl_loss
 
@@ -473,15 +472,6 @@ class SAC_MULTI(OffPolicyRLModel):
                         policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                         # policy_optimizer = RAdamOptimizer(learning_rate=self.learning_rate_ph, beta1=0.9, beta2=0.999, weight_decay=0.0)
                         policy_var_list = tf_util.get_trainable_vars('model/pi/train')
-                        # print("Policy optimizee: ")
-                        # for var in policy_var_list:
-                        #     tf.summary.histogram(var.name, var)
-                        #     print("\t",var)
-                        # policy_var_freeze = tf_util.get_trainable_vars('model/pi/freeze')
-                        # print("Policy NOT optimizee: ")
-                        # for var in policy_var_freeze:
-                        #     tf.summary.histogram(var.name, var)
-                        #     print("\t",var)
 
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                         if self.grad_logger:
@@ -496,13 +486,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         values_params = tf_util.get_trainable_vars('model/values_fn/\w*/train')
 
                         source_params_trainable = tf_util.get_trainable_vars("model/values_fn/vf/train")
-                        # print("Value source optimizee: ")
-                        # for var in source_params_trainable:
-                        #     print("\t",var)
                         target_params_trainable = tf_util.get_trainable_vars("target/values_fn/vf/train")
-                        # print("Value target optimizee: ")
-                        # for var in target_params_trainable:
-                        #     print("\t",var)
 
                         source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                         target_params = tf_util.get_trainable_vars("target/values_fn/vf")
@@ -537,19 +521,19 @@ class SAC_MULTI(OffPolicyRLModel):
                                     self.step_ops += [ent_coef_op, ent_coef_loss, self.ent_coef]
 
                         # Monitor losses and entropy in tensorboard
-                        tf.summary.scalar('policy_loss', policy_loss)
-                        tf.summary.scalar('qf1_loss', qf1_loss)
-                        tf.summary.scalar('qf2_loss', qf2_loss)
-                        tf.summary.scalar('value_loss', value_loss)
-                        tf.summary.scalar('entropy', self.entropy)
-                        tf.summary.scalar('mean/logp_pi', logp_pi_mean)
-
+                        {
+                            tf.summary.scalar('policy_loss', policy_loss),
+                            tf.summary.scalar('qf1_loss', qf1_loss),
+                            tf.summary.scalar('qf2_loss', qf2_loss),
+                            tf.summary.scalar('value_loss', value_loss),
+                            tf.summary.scalar('entropy', self.entropy),
+                        }
                         if ent_coef_loss is not None:
-                            tf.summary.scalar('ent_coef_loss', ent_coef_loss)
-                            tf.summary.scalar('ent_coef', self.ent_coef)
+                            tf.summary.scalar('ent_coef_loss', ent_coef_loss),
+                            tf.summary.scalar('ent_coef', self.ent_coef),
                             tf.summary.scalar('target_ent', self.target_entropy)
-                        #tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
-
+                            #tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
+                                
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
@@ -683,12 +667,6 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Afterwards, use the learned policy
                 # if random_exploration is set to 0 (normal setting)
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
-                    # NOTE:
-                    # -> 처음 exploration 하는 동안에 action space에서 sample하지 말고
-                    #     1. weight를 sample하는 방향
-                    # -> reward structure에 rulebased.
-                    # -> reward에 constraint. preference 반영.. <- debugging 용도로 사용. reward function에서 reaching penalty.
-
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()

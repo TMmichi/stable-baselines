@@ -25,8 +25,8 @@ def gaussian_likelihood(input_, mu_, log_std):
     :return: (tf.Tensor)
     """
     pre_sum = -0.5 * (((input_ - mu_) / (tf.exp(log_std) + EPS)) ** 2 + 2 * log_std + np.log(2 * np.pi))
-    pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
-    pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
+    # pre_sum = tf.Print(pre_sum, [pre_sum,],'\nlog likelihood: ', summarize=-1)
+    # pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
 
@@ -99,7 +99,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
-        # pi_MCP = mu_MCP
     
     return pi_MCP, mu_MCP, log_std_MCP
 
@@ -296,10 +295,7 @@ class FeedForwardPolicy(SACPolicy):
                     tar_sieve[index_pair[tar[i]]][i] = 1
                 ref_obs = tf.matmul(sieved_obs, ref_sieve)
                 tar_obs = tf.matmul(sieved_obs, tar_sieve)
-                # ref_obs = tf.Print(ref_obs, [ref_obs,],"ref_obs: ", summarize=-1)
-                # tar_obs = tf.Print(tar_obs, [tar_obs,],"tar_obs: ", summarize=-1)
                 subs_obs = ref_obs - tar_obs
-                # subs_obs = tf.Print(subs_obs,[subs_obs,],"subtracted_obs: ", summarize=-1)
                 if not len(remainder_list) == 0:
                     remainder = sieved_obs.shape[1].value - (len(ref) + len(tar))
                     left_sieve = np.zeros([sieved_obs.shape[1].value, remainder], dtype=np.float32)
@@ -352,17 +348,10 @@ class FeedForwardPolicy(SACPolicy):
 
         self.std = std = tf.exp(log_std)
         # Reparameterization trick
-        # mu_ = tf.Print(mu_,[mu_],"\tmu_ = ", summarize=-1)
-        # std = tf.Print(std,[std],"\tstd = ", summarize=-1)
-        # tf.summary.histogram('mu', mu_)
-        # tf.summary.histogram('std', std)
-        # tf.summary.merge_all()
-        
         pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
-        #pi_ = tf.Print(pi_,[pi_],"\tpi_ = ", summarize=-1)
         logp_pi = gaussian_likelihood(pi_, mu_, log_std)
         self.entropy = gaussian_entropy(log_std)
-        # MISSING: reg params for log and mu
+        
         # Apply squashing and account for it in the probability
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
         
@@ -487,12 +476,9 @@ class FeedForwardPolicy(SACPolicy):
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         weight_val = [self.weight[name] for name in self.weight.keys()]
-        policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
+        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
-        tf.summary.histogram('overall mu', self.deterministic_policy)
-        tf.summary.histogram('overall pi', self.policy)
-        tf.summary.histogram('overall std', self.std)
 
         return deterministic_policy, policy, logp_pi
  
@@ -552,10 +538,7 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
                         raise NotImplementedError("Image input not supported for now")
                     else:
-                        print('obs type: ',type(obs))
-                        print('obs',obs)
                         pi_h = tf.layers.flatten(obs)
-                        quit()
                     
                     #------------- Input observation sieving layer -------------#
                     sieve_layer = np.zeros([obs.shape[1].value, len(prim_dict['obs'][1])], dtype=np.float32)
@@ -569,7 +552,6 @@ class FeedForwardPolicy(SACPolicy):
                     
                     subgoal_dict = {}
                     if prim_dict.get('subgoal', None) is not None:
-                        
                         for prim_name, obs_idx in prim_dict['subgoal'].items():
                             assert prim_name in tails, "\n\t\033[91m[ERROR]: name of the target primitive not in tails or does not match\033[0m"
                             with tf.variable_scope('subgoal_'+prim_name, reuse=False):
@@ -586,6 +568,8 @@ class FeedForwardPolicy(SACPolicy):
         # Primitive setup
         for name in tails:
             prim_dict = primitives[name]
+            print("main tail: ",prim_dict['main_tail'])
+            print("current name: ", name)
             layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
             if subgoal_dict.get(name, None) is not None:
                 # subgoal_dict from weight initialization

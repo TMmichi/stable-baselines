@@ -272,7 +272,7 @@ class BaseRLModel(ABC):
                 '\n\t\033[91m[ERROR]: Newly appointed primitive should have its name designated\033[0m'
             if name == 'weight':
                 self.top_hierarchy_level = level
-                name = self.composite_primitive_name + "/" + name
+                name = self.composite_primitive_name + "/weight"
             layer_name = '/'.join(['train','level'+str(level)+'_'+name])
             primitive_name = '/'.join(['level'+str(level)+'_'+name])
             self.tails.append(primitive_name)
@@ -322,11 +322,10 @@ class BaseRLModel(ABC):
             load_value = False
             
         elif isinstance(loaded_policy, tuple):
+            cnt = False
             data_dict, param_dict = loaded_policy
             submodule_primitive = data_dict.get('primitives',OrderedDict())
-            self.primitives = {**self.primitives, **submodule_primitive}
-
-            if name is not None:
+            if name not in [None, 'continue']:
                 loaded_name = data_dict.get('composite_primitive_name', None)
                 if name != loaded_name and loaded_name is not None:
                     print("\n\t\033[93m[WARNING]: Name of the loaded policy ({0}) is different from the received name ({1}). {0} will be used.\033[0m".format(loaded_name,name))
@@ -343,19 +342,25 @@ class BaseRLModel(ABC):
                 primitive_name = '/'.join(primitive_name_list)
                 self.tails.append(primitive_name)
                 main_tail = True
+            elif name is 'continue':
+                primitive_name = 'continue'
+                layer_name = 'freeze/loaded'
+                tails = data_dict['tails']
+                for tail in tails:
+                    submodule_primitive[tail]['main_tail'] = True
+                self.tails = tails
+                main_tail = True
+                cnt = True
             else:
                 primitive_name = 'loaded'
                 layer_name = 'loaded'
                 tails = data_dict['tails']
                 self.tails = tails
                 main_tail = True
+            self.primitives = {**self.primitives, **submodule_primitive}
 
             obs_space = data_dict['observation_space']
             act_space = data_dict['action_space']
-            # assert len(obs_index) == obs_space.shape[0], \
-            #     '\n\t\033[91m[ERROR]: Loaded observation dimension mismatches with the length of obs_index. Loaded obs_dimension = {0}, len(obs_index) = {1}\033[0m'.format(obs_space.shape[0], len(obs_index))
-            # assert len(act_index) == act_space.shape[0], \
-            #     '\n\t\033[91m[ERROR]: Loaded action dimension mismatches with the length of act_index. Loaded act_dimension = {0}, len(act_index) = {1}\033[0m'.format(act_space.shape[0], len(act_index))
             obs_index.sort()
             act_index.sort()
 
@@ -364,7 +369,7 @@ class BaseRLModel(ABC):
 
             if 'pretrained_param' not in self.primitives.keys():
                 self.primitives['pretrained_param'] = [[],{}]
-            updated_layer_name, updated_param_dict = self.loaded_policy_name_update(layer_name, param_dict, load_value)
+            updated_layer_name, updated_param_dict = self.loaded_policy_name_update(layer_name, param_dict, load_value, cnt)
             self.primitives['pretrained_param'][0] += updated_layer_name
             self.primitives['pretrained_param'][1] = {**self.primitives['pretrained_param'][1], **updated_param_dict}
             policy_layer_structure, value_layer_structure = self.get_layer_structure((obs, act), param_dict, load_value)
@@ -374,11 +379,11 @@ class BaseRLModel(ABC):
         self.primitives[primitive_name] = {'obs': obs, 'act': act, 'act_scale': act_scale, 'obs_relativity': obs_relativity, 'subgoal': subgoal, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
         
     @staticmethod
-    def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value):
+    def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value, cnt):
         '''
         Concatenate name of each layers with name of the primitive
 
-        :param name: (str) name of the primitive layer
+        :param layer_name: (str) name of the primitive layer
         :param loaded_policy_dict: (dict) Dictionary of parameters of layers by name
         :param load_value: (bool) Use loaded separate value network
         :return: (list, dict) List consisting names of layers with specified primitive
@@ -395,7 +400,6 @@ class BaseRLModel(ABC):
             if 'pi' in name_elem:
                 insert_index = 2
                 add_value = True
-            # elif 'values_fn' in name_elem and layer_name != 'loaded':
             elif 'values_fn' in name_elem:                
                 if load_value:
                     insert_index = 3
@@ -403,7 +407,10 @@ class BaseRLModel(ABC):
 
             if add_value:
                 if layer_name:
-                    name_elem.insert(insert_index, layer_name)
+                    if cnt and 'weight' in name_elem:
+                        name_elem.insert(insert_index, 'train')
+                    else:
+                        name_elem.insert(insert_index, layer_name)
                 updated_name = '/'.join(name_elem)
                 # print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
@@ -807,7 +814,13 @@ class BaseRLModel(ABC):
         :param env: (Gym Environment) the new environment to run the loaded model on
         :param kwargs: extra arguments to change the model when loading
         """
-        if 'loaded' not in model.primitives.keys():
+        if 'loaded' in model.primitives.keys():
+            data = {'observation_space': model.primitives['loaded']['obs'][0], \
+                    'action_space': model.primitives['loaded']['act'][0]}
+        elif 'continue' in model.primitives.keys():
+            data = {'observation_space': model.primitives['continue']['obs'][0], \
+                    'action_space': model.primitives['continue']['act'][0]}
+        else:
             # Check the existence of 'train/weight' in primitives
             weight_name = model.weight_check(model.primitives, model.composite_primitive_name, model.top_hierarchy_level)
             
@@ -818,9 +831,6 @@ class BaseRLModel(ABC):
             # data = {'observation_space': gym.spaces.Box(ranges[0][0], ranges[0][1], dtype=np.float32), \
             #         'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)}
             data = {'action_space': gym.spaces.Box(ranges[1][0], ranges[1][1], dtype=np.float32)}
-        else:
-            data = {'observation_space': model.primitives['loaded']['obs'][0], \
-                    'action_space': model.primitives['loaded']['act'][0]}
         
         model.__dict__.update(kwargs)
         model.__dict__.update(data)
@@ -842,6 +852,7 @@ class BaseRLModel(ABC):
 
         :param primitives: (dict) obs/act/structure info of primitives
         '''
+        print(primitives.keys())
         weight_name = 'level'+str(level)+'_'+composite_primitive_name+"/weight"
         assert weight_name in primitives.keys(), \
             '\n\t\033[91m[ERROR]: No weight at the top level hierarchy. YOU MUST HAVE IT\033[0m'

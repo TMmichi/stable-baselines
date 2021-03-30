@@ -52,7 +52,7 @@ class HPCPPO(ActorCriticRLModel):
         If None, the number of cpu of the current machine will be used.
     """
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
-                 max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
+                 max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.01, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
 
@@ -165,7 +165,7 @@ class HPCPPO(ActorCriticRLModel):
                         self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
                         self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
-                        neglogpweight = train_model.get_neglog_weight()
+                        self.neglogpweight = train_model.get_neglog_weight()
 
                         # neglogpac_tm = train_model.neglogp_call(self.action_ph)
                         # neglogpac_am = act_model.neglogp_call(self.action_ph)
@@ -205,18 +205,19 @@ class HPCPPO(ActorCriticRLModel):
                         vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
                         self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
 
-                        ratio = tf.exp(self.old_neglog_pac_ph - neglogpweight)
+                        ratio = tf.exp(self.old_neglog_pac_ph - self.neglogpweight)
+                        clipped_ratio = tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 + self.clip_range_ph)
                         pg_losses = -self.advs_ph * ratio
-                        pg_losses2 = -self.advs_ph * tf.clip_by_value(ratio, 1.0 - self.clip_range_ph, 1.0 +
-                                                                    self.clip_range_ph)
+                        pg_losses2 = -self.advs_ph * clipped_ratio
                         self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
-                        self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpweight - self.old_neglog_pac_ph))
+                        self.approxkl = .5 * tf.reduce_mean(tf.square(self.neglogpweight - self.old_neglog_pac_ph))
                         self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
                                                                         self.clip_range_ph), tf.float32))
                         loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
 
                         tf.summary.scalar('entropy_loss', self.entropy)
                         tf.summary.scalar('policy_gradient_loss', self.pg_loss)
+                        tf.summary.scalar('clipped_ratio', tf.reduce_mean(clipped_ratio))
                         tf.summary.scalar('ratio', tf.reduce_mean(ratio))
                         tf.summary.scalar('value_function_loss', self.vf_loss)
                         tf.summary.scalar('approximate_kullback-leibler', self.approxkl)
@@ -277,7 +278,7 @@ class HPCPPO(ActorCriticRLModel):
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
                 self.summary = tf.summary.merge_all()
 
-    def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, weights, update,
+    def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, neglogweight, update,
                     writer, states=None, cliprange_vf=None, epoch=None):
         """
         Training of PPO2 Algorithm
@@ -299,7 +300,6 @@ class HPCPPO(ActorCriticRLModel):
         """
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-        neglogweight = -np.log(weights)
         td_map = {self.act_model.obs_ph: obs, self.train_model.obs_ph: obs,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.learning_rate_ph: learning_rate, self.clip_range_ph: cliprange,
@@ -330,11 +330,6 @@ class HPCPPO(ActorCriticRLModel):
                     summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                         [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
                         td_map)
-                # print("\nEpoch: ", epoch)
-                # tm, am = self.sess.run([self.neglogpac_tm, self.neglogpac_am], td_map)
-                # print("train model neglog policy: ", tm)
-                # print("\nactor model neglog policy: ", am)
-                # print('\nneglog policy at runtime: ', neglogpacs)
             if epoch > 0:
                 writer.add_summary(summary, (update * update_fac))
         else:
@@ -383,7 +378,7 @@ class HPCPPO(ActorCriticRLModel):
                 print("############################################RUNNER CALL############################################")
                 rollout = self.runner.run(callback)
                 # Unpack
-                obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward, weights = rollout
+                obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward, neglogweight = rollout
                 callback.on_rollout_end()
 
                 # Early stopping due to the callback
@@ -403,7 +398,7 @@ class HPCPPO(ActorCriticRLModel):
                                                                             self.n_batch + start) // batch_size)
                             end = start + batch_size
                             mb_inds = inds[start:end]
-                            slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs, weights))
+                            slices = (arr[mb_inds] for arr in (obs, returns, masks, actions, values, neglogpacs, neglogweight))
                             mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
                                                                  update=timestep, cliprange_vf=cliprange_vf_now, epoch=epoch_num))
                 else:  # recurrent version
@@ -536,7 +531,7 @@ class Runner(AbstractEnvRunner):
         """
         # mb stands for minibatch
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
-        mb_weights = []
+        mb_neglogweight = []
         mb_states = self.states
         ep_infos = []
         for iteration in range(self.n_steps):
@@ -545,8 +540,8 @@ class Runner(AbstractEnvRunner):
             actions, pi, mu, subgoal, weight, neglogweight, values, neglogpacs = self.model.subgoal_step(self.obs, self.states, self.dones)
             mb_obs.append(self.obs.copy())
             # mb_actions.append(actions)
-            print('neglogweight: ',neglogweight)
-            mb_weights.append(neglogweight)
+            # print('neglogweight: ',neglogweight)
+            mb_neglogweight.append(neglogweight[:,0])
             mb_actions.append(pi)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
@@ -580,7 +575,7 @@ class Runner(AbstractEnvRunner):
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
         mb_actions = np.asarray(mb_actions)
-        mb_weights = np.asarray(mb_weights)
+        mb_neglogweight = np.asarray(mb_neglogweight)
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
@@ -600,13 +595,9 @@ class Runner(AbstractEnvRunner):
             mb_advs[step] = last_gae_lam = delta + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 
-        mb_obs, mb_returns, mb_dones, mb_weights, mb_actions, mb_values, mb_neglogpacs, true_reward = \
-            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_weights, mb_actions, mb_values, mb_neglogpacs, true_reward))
-        print("mb_neglogpacs shape: ", mb_neglogpacs.shape)
-        print("mb_weights shape: ", mb_weights.shape)
-        print('mb_neglogpacs: ',mb_neglogpacs)
-        print("mb_weights: ", mb_weights)
-        return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward, mb_weights
+        mb_obs, mb_returns, mb_dones, mb_neglogweight, mb_actions, mb_values, mb_neglogpacs, true_reward = \
+            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_neglogweight, mb_actions, mb_values, mb_neglogpacs, true_reward))
+        return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward, mb_neglogweight
 
 
 # obs, returns, masks, actions, values, neglogpacs, states = runner.run()
