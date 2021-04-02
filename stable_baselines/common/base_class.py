@@ -344,12 +344,20 @@ class BaseRLModel(ABC):
                 main_tail = True
             elif name is 'continue':
                 primitive_name = 'continue'
-                layer_name = 'freeze/loaded'
                 tails = data_dict['tails']
-                for tail in tails:
-                    submodule_primitive[tail]['main_tail'] = True
                 self.tails = tails
                 main_tail = True
+                for tail in tails:
+                    submodule_primitive[tail]['main_tail'] = True
+                if freeze:
+                    layer_name = 'freeze/loaded'
+                else:
+                    layer_name = 'train/loaded'
+                    for tail in tails:
+                        lname = submodule_primitive[tail]['layer_name'].split("/")
+                        if lname[0] == 'freeze':
+                            lname[0] = 'train'
+                        submodule_primitive[tail]['layer_name'] = '/'.join(lname)
                 cnt = True
             else:
                 primitive_name = 'loaded'
@@ -420,7 +428,6 @@ class BaseRLModel(ABC):
 
     @staticmethod
     def get_layer_structure(argument_tuple, loaded_policy_dict, load_value):
-        # TODO: Change target/values_fn ~~
         '''
         Return layer structure of the policy/value from parameter dictionary
 
@@ -432,14 +439,10 @@ class BaseRLModel(ABC):
         obs, _ = argument_tuple
         policy_layer_structure = []
         value_layer_structure = []
-        # if loaded for pretraining: model/pi/fc0/kernel:0
-        # if loaded for testing: model/pi/name_of_primitive/fc0/kernel:0
         for name, value in loaded_policy_dict.items():
             if name.find("pi/fc") > -1:
                 if name.find("fc0/kernel") > -1:
                     pass
-                    # assert obs_dim == value.shape[0], \
-                    #     "\n\t\033[91m[ERROR/Loaded Primitive]: Observation input of param shape does not match with the observation box. Potential corruption occured\033[0m"
                 if name.find("bias") > -1:
                     policy_layer_structure.append(value.shape[0])
             if load_value:

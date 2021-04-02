@@ -84,9 +84,8 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     with tf.variable_scope("fuse"):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
-            weight_cutoff = tf.clip_by_value(weight[:,i], EPS, 1-EPS)
-            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight_cutoff,[-1,1]))
-            weight_tile = tf.tile(tf.reshape(weight_cutoff,[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
+            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
+            weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
             mu_weighted_i = mu_array[i] * normed_weight_index
             shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
@@ -320,9 +319,9 @@ class FeedForwardPolicy(SACPolicy):
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
                 # pi_h = tf.layers.flatten(obs)
-                new_obs = tf.Print(new_obs, [new_obs,], 'subs obs', summarize=-1)
+                # new_obs = tf.Print(new_obs, [new_obs,], 'subs obs', summarize=-1)
                 pi_h = tf.layers.flatten(new_obs)
-            pi_h = tf.Print(pi_h, [pi_h,], 'obs: ', summarize=-1)
+            # pi_h = tf.Print(pi_h, [pi_h,], 'obs: ', summarize=-1)
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
             self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
@@ -475,7 +474,7 @@ class FeedForwardPolicy(SACPolicy):
 
         # policies with squashing func at test time
         deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
-        weight_val = [self.weight[name] for name in self.weight.keys()]
+        # weight_val = [self.weight[name] for name in self.weight.keys()]
         # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
         self.policy = policy
         self.deterministic_policy = deterministic_policy
@@ -483,7 +482,7 @@ class FeedForwardPolicy(SACPolicy):
         return deterministic_policy, policy, logp_pi
  
     def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
-                    create_vf=True, create_qf=True):
+                    create_vf=True, create_qf=True, weight=False, sacd=True):
         """
         Creates the two Q-Values approximator along with the HPC Value function
 
@@ -494,6 +493,8 @@ class FeedForwardPolicy(SACPolicy):
         :param scope: (str) the scope name
         :param create_vf: (bool) Whether to create Value fn or not
         :param create_qf: (bool) Whether to create Q-Values fn or not
+        :param weight: (bool) Whether to create Q-Values with respect to weights
+        :param sacd: (bool) Q function for Discrete-SAC
         :return: ([tf.Tensor]) Mean, action and log probability
         """
         self.qf1 = 0
@@ -511,9 +512,9 @@ class FeedForwardPolicy(SACPolicy):
             if create_qf:
                 # Double Q values to reduce overestimation
                 with tf.variable_scope('qf1', reuse=reuse):
-                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf1=True)
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf1=True, weight=weight, sacd=sacd)
                 with tf.variable_scope('qf2', reuse=reuse):
-                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf2=True)
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf2=True, weight=weight, sacd=sacd)
 
         return self.qf1, self.qf2, self.value_fn
 
@@ -532,7 +533,8 @@ class FeedForwardPolicy(SACPolicy):
             if 'weight' in name.split('/'):
                 print('Graph of '+name+' initializing')
                 prim_dict = primitives[name]
-                layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
+                main_tail = True if prim_dict['main_tail'] else False
+                layer_name = prim_dict['layer_name'] if main_tail else name
                 with tf.variable_scope(layer_name, reuse=reuse):
                     if self.feature_extraction == "cnn":
                         pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
@@ -548,7 +550,11 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
+                    weight = tf.clip_by_value(weight, EPS, 1-EPS)
                     self.weight[name] = weight
+                    if main_tail:
+                        self.weight_tf = weight
+                        self.log_weight = tf.log(weight)
                     
                     subgoal_dict = {}
                     if prim_dict.get('subgoal', None) is not None:
@@ -666,7 +672,7 @@ class FeedForwardPolicy(SACPolicy):
         return pi_MCP, mu_MCP, log_std_MCP
   
     def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, 
-                                create_vf=False, create_qf=False, qf1=False, qf2=False):
+                                create_vf=False, create_qf=False, qf1=False, qf2=False, weight=False, sacd=True):
         print("Received tails in value graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -700,12 +706,15 @@ class FeedForwardPolicy(SACPolicy):
                             self.primitive_value[layer_name] = value_fn
 
                         if create_qf:
-                            #------------- Input action sieving layer -------------#
-                            sieve_layer = np.zeros([action.shape[1], len(prim_dict['act'][1])], dtype=np.float32)
-                            for i in range(len(prim_dict['act'][1])):
-                                sieve_layer[prim_dict['act'][1][i]][i] = 1
-                            qf_h = tf.matmul(action, sieve_layer)
-                            #------------- Action sieving layer End -------------#
+                            if not weight:
+                                #------------- Input action sieving layer -------------#
+                                sieve_layer = np.zeros([action.shape[1], len(prim_dict['act'][1])], dtype=np.float32)
+                                for i in range(len(prim_dict['act'][1])):
+                                    sieve_layer[prim_dict['act'][1][i]][i] = 1
+                                qf_h = tf.matmul(action, sieve_layer)
+                                #------------- Action sieving layer End -------------#
+                            else:
+                                qf_h = action
                             
                             # Concatenate preprocessed state and action
                             qf_h = tf.concat([critics_h, qf_h], axis=-1)
@@ -748,23 +757,26 @@ class FeedForwardPolicy(SACPolicy):
                         self.primitive_value[layer_name] = value_fn
 
                     if create_qf:
-                        #------------- Input action sieving layer -------------#
-                        sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
-                        for i in range(len(prim_dict['composite_action_index'])):
-                            sieve_layer[prim_dict['composite_action_index']][i] = 1
-                        qf_h = tf.matmul(action, sieve_layer)
-                        #------------- Action sieving layer End -------------#
+                        if not weight:
+                            #------------- Input action sieving layer -------------#
+                            sieve_layer = np.zeros([action.shape[1], len(prim_dict['composite_action_index'])], dtype=np.float32)
+                            for i in range(len(prim_dict['composite_action_index'])):
+                                sieve_layer[prim_dict['composite_action_index']][i] = 1
+                            qf_h = tf.matmul(action, sieve_layer)
+                            #------------- Action sieving layer End -------------#
+                        else:
+                            qf_h = None if sacd else action
                         
                         # Concatenate preprocessed state and action
-                        qf_h = tf.concat([critics_h, qf_h], axis=-1)
-
+                        qf_h = critics_h if sacd else tf.concat([critics_h, qf_h], axis=-1)
                         qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
+                        weight_dim = len(prim_dict['act'][1]) if sacd else 1
                         if qf1:
-                            qf = tf.layers.dense(qf_h, 1, name="qf1")
+                            qf = tf.layers.dense(qf_h, weight_dim, name="qf1")
                             self.qf1 += qf
                             self.primitive_qf1[layer_name] = qf
                         if qf2:
-                            qf = tf.layers.dense(qf_h, 1, name="qf2")
+                            qf = tf.layers.dense(qf_h, weight_dim, name="qf2")
                             self.qf2 += qf
                             self.primitive_qf2[layer_name] = qf
 
@@ -780,6 +792,18 @@ class FeedForwardPolicy(SACPolicy):
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
+    
+    def get_tf_weight(self):
+        return self.weight_tf
+    
+    def get_log_weight(self):
+        return self.log_weight
+
+    def get_sliced_tf_weight(self):
+        return tf.slice(self.weight_tf, [0, 0], [-1,1])
+    
+    def get_sliced_log_weight(self):
+        return tf.slice(self.log_weight, [0, 0], [-1,1])
 
     def get_primitive_action(self, obs):
         return self.sess.run(self.primitive_actions, {self.obs_ph: obs})
