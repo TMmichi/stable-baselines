@@ -125,7 +125,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.grad_logger = False
         self.direct_weight = True
         self.SACD = False
-        self.mod_SACD = True
+        self.mod_SACD = False
 
         if _init_setup_model:
             self.setup_model()
@@ -380,7 +380,10 @@ class SAC_MULTI(OffPolicyRLModel):
                         for key_name in primitives.keys():
                             if 'weight' in key_name.split('/'):
                                 weight_dim = len(primitives[key_name]['act'][1])
-                        self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + (weight_dim,), name='actions_weight')
+                        if self.mod_SACD:
+                            self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + (weight_dim,), name='actions_weight')
+                        else:
+                            self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + (1,), name='actions_weight')
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
                     with tf.variable_scope("model", reuse=False):
                         # Create the policy
@@ -404,9 +407,9 @@ class SAC_MULTI(OffPolicyRLModel):
                         
                         #  Use two Q-functions to improve performance by reducing overestimation bias.
                         qf1, qf2, value_fn = self.policy_tf.make_HPC_critics(self.processed_obs_ph, self.actions_ph, primitives, self.tails,
-                                                                        create_qf=True, create_vf=True, weight=self.direct_weight, sacd=self.SACD)
+                                                                        create_qf=True, create_vf=True, weight=self.direct_weight, SACD=self.SACD)
                         qf1_pi, qf2_pi, _ = self.policy_tf.make_HPC_critics(self.processed_obs_ph, policy_out, primitives, self.tails,
-                                                                        create_qf=True, create_vf=False, reuse=True, weight=self.direct_weight, sacd=self.SACD)
+                                                                        create_qf=True, create_vf=False, reuse=True, weight=self.direct_weight, SACD=self.SACD)
 
                         # Target entropy is used when learning the entropy coefficient
                         if self.target_entropy == 'auto':
@@ -820,7 +823,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         frac = 1.0 - step / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
-                        if self.num_timesteps < self.learning_starts * 100:
+                        if self.num_timesteps < self.learning_starts * 500:
                             mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
                         else:
                             mb_infos_vals.append(self._train_step(step, writer, current_lr))

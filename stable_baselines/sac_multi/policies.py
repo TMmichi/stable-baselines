@@ -482,7 +482,7 @@ class FeedForwardPolicy(SACPolicy):
         return deterministic_policy, policy, logp_pi
  
     def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
-                    create_vf=True, create_qf=True, weight=False, sacd=True):
+                    create_vf=True, create_qf=True, weight=False, SACD=True):
         """
         Creates the two Q-Values approximator along with the HPC Value function
 
@@ -494,7 +494,7 @@ class FeedForwardPolicy(SACPolicy):
         :param create_vf: (bool) Whether to create Value fn or not
         :param create_qf: (bool) Whether to create Q-Values fn or not
         :param weight: (bool) Whether to create Q-Values with respect to weights
-        :param sacd: (bool) Q function for Discrete-SAC
+        :param SACD: (bool) Q function for Discrete-SAC
         :return: ([tf.Tensor]) Mean, action and log probability
         """
         self.qf1 = 0
@@ -512,9 +512,9 @@ class FeedForwardPolicy(SACPolicy):
             if create_qf:
                 # Double Q values to reduce overestimation
                 with tf.variable_scope('qf1', reuse=reuse):
-                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf1=True, weight=weight, sacd=sacd)
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf1=True, weight=weight, SACD=SACD)
                 with tf.variable_scope('qf2', reuse=reuse):
-                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf2=True, weight=weight, sacd=sacd)
+                    self.construct_value_graph(obs, action, primitives, tails, reuse=reuse, create_qf=True, qf2=True, weight=weight, SACD=SACD)
 
         return self.qf1, self.qf2, self.value_fn
 
@@ -672,7 +672,7 @@ class FeedForwardPolicy(SACPolicy):
         return pi_MCP, mu_MCP, log_std_MCP
   
     def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, 
-                                create_vf=False, create_qf=False, qf1=False, qf2=False, weight=False, sacd=True):
+                                create_vf=False, create_qf=False, qf1=False, qf2=False, weight=False, SACD=True):
         print("Received tails in value graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -765,12 +765,12 @@ class FeedForwardPolicy(SACPolicy):
                             qf_h = tf.matmul(action, sieve_layer)
                             #------------- Action sieving layer End -------------#
                         else:
-                            qf_h = None if sacd else action
+                            qf_h = None if SACD else action
                         
                         # Concatenate preprocessed state and action
-                        qf_h = critics_h if sacd else tf.concat([critics_h, qf_h], axis=-1)
+                        qf_h = critics_h if SACD else tf.concat([critics_h, qf_h], axis=-1)
                         qf_h = mlp(qf_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
-                        weight_dim = len(prim_dict['act'][1]) if sacd else 1
+                        weight_dim = len(prim_dict['act'][1]) if SACD else 1
                         if qf1:
                             qf = tf.layers.dense(qf_h, weight_dim, name="qf1")
                             self.qf1 += qf
