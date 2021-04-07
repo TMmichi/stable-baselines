@@ -338,6 +338,7 @@ class BaseRLModel(ABC):
                     tails = None
                 else:
                     tails = data_dict.get('tails',None)
+                    tails = None if len(tails) == 0 else tails
                 layer_name = '/'.join(layer_name_list)
                 primitive_name = '/'.join(primitive_name_list)
                 self.tails.append(primitive_name)

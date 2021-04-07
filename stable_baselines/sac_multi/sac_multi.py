@@ -595,7 +595,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         {
                             tf.summary.scalar('policy_loss', policy_loss),
                             tf.summary.scalar('qf1_loss', qf1_loss),
-                            tf.summary.scalar('qf2_loss', qf2_loss),
+                            # tf.summary.scalar('qf2_loss', qf2_loss),
                             tf.summary.scalar('value_loss', value_loss),
                             tf.summary.scalar('entropy', self.entropy),
                         }

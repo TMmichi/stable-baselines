@@ -79,12 +79,9 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     :param total_action_dimension: (int) Dimension of a total action
     :return: ([tf.Tensor]) Samples of fused policy, fused mean, and fused standard deviations
     """
-    # task_list = ['aux','reach','grasp']
-    task_list = ['reach','grasp']
     with tf.variable_scope("fuse"):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
-            tf.summary.histogram('weight '+task_list[i], tf.reshape(weight[:,i],[-1,1]))
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
             mu_weighted_i = mu_array[i] * normed_weight_index
@@ -95,7 +92,6 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
             std_sum += tf.matmul(normed_weight_index, shaper)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
-        # log_std_MCP = tf.log(tf.clip_by_value(std_MCP, LOG_STD_MIN, LOG_STD_MAX), name="log_std_MCP")
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
