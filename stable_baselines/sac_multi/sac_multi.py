@@ -125,7 +125,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.grad_logger = False
         self.direct_weight = True
         self.SACD = False
-        self.mod_SACD = False
+        self.mod_SACD = True
 
         if _init_setup_model:
             self.setup_model()
@@ -486,10 +486,15 @@ class SAC_MULTI(OffPolicyRLModel):
                                 dotp = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight - qf1_pi), axis=-1)
                                 policy_kl_loss = tf.reduce_mean(dotp)
                             elif self.mod_SACD:
+                                # NOTE: Tiled Q setting
                                 Q_tile = tf.tile(tf.reshape(qf1_pi,[-1,1]),tf.constant([1,weight_dim]))
-                                Q_tile = tf.Print(Q_tile,[Q_tile,],"Q_tile: ",summarize=-1)
                                 dotp = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight - Q_tile), axis=-1)
-                                policy_kl_loss = tf.reduce_mean(dotp)
+                                policy_kl_loss = tf.reduce_mean(dotp, axis=-1)
+
+                                # NOTE: one Q setting
+                                #wdotp = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight), axis=-1)
+                                #qf1_pi = tf.reshape(qf1_pi,[-1])
+                                #policy_kl_loss = tf.reduce_mean(wdotp - qf1_pi, axis=-1)
                             else:
                                 policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_weight - qf1_pi)
                         policy_loss = policy_kl_loss
@@ -505,6 +510,7 @@ class SAC_MULTI(OffPolicyRLModel):
                             elif self.mod_SACD:
                                 minQ_tile = tf.tile(tf.reshape(min_qf_pi,[-1,1]),tf.constant([1,weight_dim]))
                                 v_backup = tf.stop_gradient(tf.reduce_sum(policy_out * (minQ_tile - self.ent_coef * logp_weight), axis=-1))
+                                #v_backup = tf.stop_gradient(min_qf_pi - tf.reduce_sum(policy_out * (self.ent_coef * logp_weight), axis=-1))
                             else:
                                 v_backup = tf.stop_gradient(min_qf_pi - self.ent_coef * logp_weight)
                         value_loss = 0.5 * tf.reduce_mean((value_fn - v_backup) ** 2)
@@ -739,20 +745,21 @@ class SAC_MULTI(OffPolicyRLModel):
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
                 # if random_exploration is set to 0 (normal setting)
+                weight = [0.5,0.5]
+                subgoal = None
+                id=None
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     unscaled_action = self.env.action_space.sample()
                     action = scale_action(self.action_space, unscaled_action)
-                    weight = [0.5,0.5]
-                    # weight = None
-                    subgoal = None
                 else:
                     # NOTE: non_subgoal
                     # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                     # weight = subgoal = None
                     # NOTE: subgoal
                     action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
+                    # action, subgoal, weight, id = self.policy_tf.subgoal_step_temp(obs[None], deterministic=False)
                     action = action.flatten()
                     unscaled_action = unscale_action(self.action_space, action)
 
@@ -765,7 +772,7 @@ class SAC_MULTI(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal)
+                new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal, id=id)
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
@@ -823,7 +830,7 @@ class SAC_MULTI(OffPolicyRLModel):
                         frac = 1.0 - step / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
-                        if self.num_timesteps < self.learning_starts * 500:
+                        if self.num_timesteps < self.learning_starts * 200:
                             mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
                         else:
                             mb_infos_vals.append(self._train_step(step, writer, current_lr))

@@ -1,5 +1,7 @@
 from abc import abstractmethod
 
+from numpy.lib.function_base import select
+
 import tensorflow as tf
 import numpy as np
 from gym.spaces import Box
@@ -96,6 +98,29 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
     return pi_MCP, mu_MCP, log_std_MCP
+
+def fuse_networks_categorical(mu_array, log_std_array, weight, act_index, total_action_dimension):
+    for i in range(len(mu_array)):
+        shaper = np.zeros([len(act_index[i]), total_action_dimension], dtype=np.float32)
+        for j, index in enumerate(act_index[i]):
+            shaper[j][index] = 1
+        mu_array[i] = tf.matmul(mu_array[i], shaper)
+        log_std_array[i] = tf.matmul(log_std_array[i], shaper)
+
+    logit = tf.log(weight/(1-weight))
+
+    uniform = tf.random_uniform(tf.shape(logit), dtype=logit.dtype)
+    select_idx = tf.argmax(logit - tf.log(-tf.log(uniform)), axis=-1) * 2
+    
+    def mu0(): return mu_array[0]
+    def mu1(): return mu_array[1]
+    def logstd0(): return log_std_array[0]
+    def logstd1(): return log_std_array[1]
+     
+    mu_categorical = tf.cond(tf.reduce_mean(select_idx - 1) < 0, mu0, mu1)
+    log_std_categorical = tf.cond(tf.reduce_mean(select_idx - 1) < 0, logstd0, logstd1)
+    pi_categorical = tf.math.add(mu_categorical, tf.random_normal(tf.shape(mu_categorical)) * tf.exp(log_std_categorical), name="pi_categorical")
+    return pi_categorical, mu_categorical, log_std_categorical, select_idx
 
 
 class SACPolicy(BasePolicy):
@@ -257,6 +282,7 @@ class FeedForwardPolicy(SACPolicy):
         self.reg_loss = None
         self.reg_weight = reg_weight
         self.activ_fn = act_fun
+        self.selected_idx = None
 
     def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
         if obs is None:
@@ -663,8 +689,10 @@ class FeedForwardPolicy(SACPolicy):
         
         assert not isinstance(weight, type(None)), \
             '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
+        selected_idx = None
         pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
-        
+        # pi_MCP, mu_MCP, log_std_MCP, selected_idx = fuse_networks_categorical(mu_array, log_std_array, weight, act_index, total_action_dimension)
+        self.selected_idx = selected_idx
         return pi_MCP, mu_MCP, log_std_MCP
   
     def construct_value_graph(self, obs=None, action=None, primitives=None, tails=None, reuse=False, 
@@ -785,6 +813,11 @@ class FeedForwardPolicy(SACPolicy):
         if deterministic:
             return self.sess.run([self.deterministic_policy, self.subgoal, self.weight], {self.obs_ph: obs})
         return self.sess.run([self.policy, self.subgoal, self.weight], {self.obs_ph: obs})
+    
+    def subgoal_step_temp(self, obs, state=None, mask=None, deterministic=False):
+        if deterministic:
+            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight, self.selected_idx], {self.obs_ph: obs})
+        return self.sess.run([self.policy, self.subgoal, self.weight, self.selected_idx], {self.obs_ph: obs})
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})
