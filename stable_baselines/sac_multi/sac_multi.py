@@ -745,7 +745,8 @@ class SAC_MULTI(OffPolicyRLModel):
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
                 # if random_exploration is set to 0 (normal setting)
-                weight = [0.5,0.5]
+                # weight = [0.5,0.5]
+                weight = None
                 subgoal = None
                 id=None
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
@@ -755,10 +756,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     action = scale_action(self.action_space, unscaled_action)
                 else:
                     # NOTE: non_subgoal
-                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    # weight = subgoal = None
+                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    weight = subgoal = None
                     # NOTE: subgoal
-                    action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
+                    # action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
                     # action, subgoal, weight, id = self.policy_tf.subgoal_step_temp(obs[None], deterministic=False)
                     action = action.flatten()
                     unscaled_action = unscale_action(self.action_space, action)
