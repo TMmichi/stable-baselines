@@ -10,6 +10,7 @@ from stable_baselines.common.policies import BasePolicy, nature_cnn, register_po
 from stable_baselines.common.tf_layers import mlp
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
+weight_EPS = 1e-10
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 5
 LOG_STD_MIN = -5
@@ -31,7 +32,6 @@ def gaussian_likelihood(input_, mu_, log_std):
     # pre_sum = tf.Print(pre_sum, [tf.reduce_sum(pre_sum, axis=1),],'summed log likelihood: ', summarize=-1)
     return tf.reduce_sum(pre_sum, axis=1)
 
-
 def gaussian_entropy(log_std):
     """
     Compute the entropy for a diagonal Gaussian distribution.
@@ -41,12 +41,10 @@ def gaussian_entropy(log_std):
     """
     return tf.reduce_sum(log_std + 0.5 * np.log(2.0 * np.pi * np.e), axis=-1)
 
-
 def clip_but_pass_gradient(input_, lower=-1., upper=1.):
     clip_up = tf.cast(input_ > upper, tf.float32)
     clip_low = tf.cast(input_ < lower, tf.float32)
     return input_ + tf.stop_gradient((upper - input_) * clip_up + (lower - input_) * clip_low)
-
 
 def apply_squashing_func(mu_, pi_, logp_pi):
     """
@@ -83,6 +81,7 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
     """
     with tf.variable_scope("fuse"):
         mu_temp = std_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
+        total_weight_sum = tf.tile(tf.reshape(weight[:,0],[-1,1]), tf.constant([1,total_action_dimension])) * 0
         for i in range(len(mu_array)):
             weight_tile = tf.tile(tf.reshape(weight[:,i],[-1,1]), tf.constant([1,mu_array[i][0].shape[0].value]))
             normed_weight_index = tf.math.divide_no_nan(weight_tile, tf.exp(log_std_array[i]))
@@ -92,9 +91,15 @@ def fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_d
                 shaper[j][index] = 1
             mu_temp += tf.matmul(mu_weighted_i, shaper)
             std_sum += tf.matmul(normed_weight_index, shaper)
+            # TEST:
+            total_weight_sum += tf.matmul(weight_tile, shaper)
         std_MCP = tf.math.reciprocal_no_nan(std_sum)
         mu_MCP = tf.math.multiply(mu_temp, std_MCP, name="mu_MCP")
+        # TEST:
+        mu_MCP *= total_weight_sum
+        std_MCP *= total_weight_sum
         log_std_MCP = tf.log(std_MCP, name="log_std_MCP")
+        
         pi_MCP = tf.math.add(mu_MCP, tf.random_normal(tf.shape(mu_MCP)) * tf.exp(log_std_MCP), name="pi_MCP")
     
     return pi_MCP, mu_MCP, log_std_MCP
@@ -572,7 +577,14 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
-                    weight = tf.clip_by_value(weight, EPS, 1-EPS)
+
+                    # NOTE: For testing
+                    # weight = tf.layers.dense(pi_h, 1, activation='softmax')
+                    # weight_ones = tf.ones_like(weight)
+                    # weight_zeros = tf.zeros_like(weight)
+                    # weight = tf.concat([weight_ones,weight_zeros], axis=-1)
+
+                    weight = tf.clip_by_value(weight, weight_EPS, 1-weight_EPS)
                     self.weight[name] = weight
                     if main_tail:
                         self.weight_tf = weight
