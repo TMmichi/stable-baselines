@@ -270,7 +270,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     if self.grad_logger:
                         self.grad_logger_op = {}
                         for index, grad in enumerate(grads):
-                            print(grad)
                             self.grad_logger_op[grad[0].name] = grad[0]
                             self.grad_logger_op[grad[1].name] = grad[1]
 
@@ -293,6 +292,11 @@ class SAC_MULTI(OffPolicyRLModel):
                         tf.assign(target, source)
                         for target, source in zip(target_params, source_params)
                     ]
+
+                    warm_start_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
+                    self.warm_start_ops = [policy_loss, qf1_loss, qf2_loss,
+                                        value_loss, qf1, qf2, value_fn, logp_pi,
+                                        self.entropy, warm_start_values_op]
 
 
                     # Control flow is used because sess.run otherwise evaluates in nondeterministic order
@@ -524,13 +528,12 @@ class SAC_MULTI(OffPolicyRLModel):
                         grads = policy_optimizer.compute_gradients(policy_loss, var_list=policy_var_list)
                         if self.grad_logger:
                             self.grad_logger_op = {}
-                            for index, grad in enumerate(grads):
+                            for grad in grads:
                                 try:
                                     self.grad_logger_op[grad[0].name] = grad[0]
                                 except Exception:
                                     pass
                                 self.grad_logger_op[grad[1].name] = grad[1]
-                        policy_grad_check = tf.check_numerics(grads[:][0], "NAN in Policy gradient")
                         policy_train_op = policy_optimizer.apply_gradients(grads)
 
                         # Value train op
@@ -566,36 +569,35 @@ class SAC_MULTI(OffPolicyRLModel):
 
                         # Control flow is used because sess.run otherwise evaluates in nondeterministic order
                         # and we first need to compute the policy action before computing q values losses
-                        with tf.control_dependencies([policy_grad_check]):
-                            with tf.control_dependencies([policy_train_op]):
-                                value_grads = value_optimizer.compute_gradients(values_losses, var_list=values_params)
-                                if self.grad_logger:
-                                    for index, grad in enumerate(value_grads):
-                                        self.grad_logger_op[grad[0].name] = grad[0]
-                                        self.grad_logger_op[grad[1].name] = grad[1]
-                                value_grad_check = tf.check_numerics(value_grads[:][0], "NAN in Value gradient")
-                                train_values_op = value_optimizer.apply_gradients(value_grads)
+                        with tf.control_dependencies([policy_train_op]):
+                            value_grads = value_optimizer.compute_gradients(values_losses, var_list=values_params)
+                            if self.grad_logger:
+                                for index, grad in enumerate(value_grads):
+                                    self.grad_logger_op[grad[0].name] = grad[0]
+                                    self.grad_logger_op[grad[1].name] = grad[1]
+                            value_grad_check = tf.check_numerics(value_grads[:][0], "NAN in Value gradient")
+                            train_values_op = value_optimizer.apply_gradients(value_grads)
 
-                                # train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
-                                with tf.control_dependencies([value_grad_check]):
-                                    self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss', 'entropy']
-                                    # All ops to call during one training step
-                                    if not self.direct_weight:
-                                        self.step_ops = [policy_loss, qf1_loss, qf2_loss,
-                                                        value_loss, qf1, qf2, value_fn, logp_pi,
-                                                        self.entropy, policy_train_op, train_values_op]
-                                        
-                                    else:
-                                        self.step_ops = [policy_loss, qf1_loss, qf2_loss,
-                                                        value_loss, qf1, qf2, value_fn, logp_weight,
-                                                        self.entropy, policy_train_op, train_values_op]
+                            # train_values_op = value_optimizer.minimize(values_losses, var_list=values_params)
+                            with tf.control_dependencies([value_grad_check]):
+                                self.infos_names = ['policy_loss', 'qf1_loss', 'qf2_loss', 'value_loss', 'entropy']
+                                # All ops to call during one training step
+                                if not self.direct_weight:
+                                    self.step_ops = [policy_loss, qf1_loss, qf2_loss,
+                                                    value_loss, qf1, qf2, value_fn, logp_pi,
+                                                    self.entropy, policy_train_op, train_values_op]
+                                    
+                                else:
+                                    self.step_ops = [policy_loss, qf1_loss, qf2_loss,
+                                                    value_loss, qf1, qf2, value_fn, logp_weight,
+                                                    self.entropy, policy_train_op, train_values_op]
 
-                                    # Add entropy coefficient optimization operation if needed
-                                    if ent_coef_loss is not None:
-                                        with tf.control_dependencies([train_values_op]):
-                                            ent_coef_op = entropy_optimizer.minimize(ent_coef_loss, var_list=self.log_ent_coef)
-                                            self.infos_names += ['ent_coef_loss', 'ent_coef']
-                                            self.step_ops += [ent_coef_op, ent_coef_loss, self.ent_coef]
+                                # Add entropy coefficient optimization operation if needed
+                                if ent_coef_loss is not None:
+                                    with tf.control_dependencies([train_values_op]):
+                                        ent_coef_op = entropy_optimizer.minimize(ent_coef_loss, var_list=self.log_ent_coef)
+                                        self.infos_names += ['ent_coef_loss', 'ent_coef']
+                                        self.step_ops += [ent_coef_op, ent_coef_loss, self.ent_coef]
 
                         # Monitor losses and entropy in tensorboard
                         {
@@ -628,11 +630,6 @@ class SAC_MULTI(OffPolicyRLModel):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-        # idx = 0
-        # for item in batch:
-        #     if np.any(np.isnan(np.array(item))):
-        #         print("NAN in ",idx)
-        #     idx += 1
         feed_dict = {
             self.observations_ph: batch_obs,
             self.next_observations_ph: batch_next_obs,
@@ -643,8 +640,7 @@ class SAC_MULTI(OffPolicyRLModel):
         if not self.SACD:
             feed_dict[self.actions_ph] = batch_actions
 
-        # Do one gradient step
-        # and optionally compute log for tensorboard
+        # Do one gradient step and optionally compute log for tensorboard
         if writer is not None:
             if self.grad_logger:
                 logger = self.sess.run(self.grad_logger_op, feed_dict)
@@ -691,7 +687,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
         # Unpack to monitor losses and entropy
         policy_loss, qf1_loss, qf2_loss, value_loss, *values = out
-        # qf1, qf2, value_fn, logp_pi, entropy, *_ = values
         entropy = values[4]
 
         if self.log_ent_coef is not None:
@@ -741,14 +736,9 @@ class SAC_MULTI(OffPolicyRLModel):
             callback.on_rollout_start()
 
             for step in range(total_timesteps - loaded_step_num):
-                # Before training starts, randomly sample actions
-                # from a uniform distribution for better exploration.
-                # Afterwards, use the learned policy
-                # if random_exploration is set to 0 (normal setting)
-                # weight = [0.5,0.5]
-                weight = None
-                subgoal = None
-                id=None
+                # Before training starts, randomly sample actions from a uniform distribution for better exploration.
+                # Afterwards, use the learned policy if random_exploration is set to 0 (normal setting)
+                weight, subgoal, id = None, None, None
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
@@ -756,16 +746,14 @@ class SAC_MULTI(OffPolicyRLModel):
                     action = scale_action(self.action_space, unscaled_action)
                 else:
                     # NOTE: non_subgoal
-                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
-                    weight = subgoal = None
+                    # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
                     # NOTE: subgoal
-                    # action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
+                    action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
                     # action, subgoal, weight, id = self.policy_tf.subgoal_step_temp(obs[None], deterministic=False)
                     action = action.flatten()
                     unscaled_action = unscale_action(self.action_space, action)
 
-                    # Add noise to the action (improve exploration,
-                    # not needed in general)
+                    # Add noise to the action (improve exploration, not needed in general)
                     if self.action_noise is not None:
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # inferred actions need to be transformed to environment action_space before stepping
@@ -776,8 +764,8 @@ class SAC_MULTI(OffPolicyRLModel):
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal, id=id)
                 self.num_timesteps += 1
 
-                # Only stop training if return value is False, not when it is None. This is for backwards
-                # compatibility with callbacks that have no return statement.
+                # Only stop training if return value is False, not when it is None. 
+                # This is for backwards compatibility with callbacks that have no return statement.
                 if callback.on_step() is False:
                     break
 
@@ -794,7 +782,13 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 else:
                     if type(weight) == dict:
-                        weight = weight['level1_picking/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level1_picking/weight'][0][0]]
+                        for name, item in weight.items():
+                            if name == 'level1_picking/weight':
+                                weight = weight['level1_picking/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level1_picking/weight'][0][0]]
+                            elif name == 'level1_placing/weight':
+                                weight = weight['level1_placing/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level1_placing/weight'][0][0]]
+                            elif name == 'level2_pickAndplace/weight':
+                                weight = weight['level2_pickAndplace/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level2_pickAndplace/weight'][0][0]]
                     else:
                         weight = [0.5, 0.5] if (self.SACD or self.mod_SACD) else [0.5]
                     self.replay_buffer.add(obs_, weight, reward_, new_obs_, float(done))
@@ -831,18 +825,14 @@ class SAC_MULTI(OffPolicyRLModel):
                         frac = 1.0 - step / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
-                        if self.num_timesteps < self.learning_starts * 200:
-                            mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
-                        else:
-                            mb_infos_vals.append(self._train_step(step, writer, current_lr))
+                        # if self.num_timesteps < self.learning_starts * 200:
+                        #     mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
+                        # else:
+                        #     mb_infos_vals.append(self._train_step(step, writer, current_lr))
                         # Update target network
                         if (step + grad_step) % self.target_update_interval == 0:
                             # Update target network
                             self.sess.run(self.target_update_op)
-                    # Log losses and entropy, useful for monitor training
-                    # if len(mb_infos_vals) > 0:
-                    #     infos_values = np.mean(mb_infos_vals, axis=0)
-
                     callback.on_rollout_start()
 
                 episode_rewards[-1] += reward_
@@ -889,7 +879,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []
-                # self.env.render()
             callback.on_training_end()
             if self.grad_logger:
                 self.file_logger.close()
