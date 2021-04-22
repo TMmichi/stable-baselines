@@ -126,6 +126,8 @@ class SAC_MULTI(OffPolicyRLModel):
         self.direct_weight = True
         self.SACD = False
         self.mod_SACD = True
+        self.weightdict_init = True
+        self.top_hierarchy = ''
 
         if _init_setup_model:
             self.setup_model()
@@ -376,7 +378,8 @@ class SAC_MULTI(OffPolicyRLModel):
                 loaded = True if 'loaded' in primitives.keys() else False
                 if loaded:
                     with tf.variable_scope("model", reuse=False):
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_HPC_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], scope='pi/loaded')
+                        self.deterministic_action, policy_out, logp_pi = \
+                            self.policy_tf.make_HPC_actor(self.processed_obs_ph, primitives, self.tails, self.action_space.shape[0], loaded=True, scope='pi/loaded')
                 else:
                     if not self.direct_weight:
                         self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape, name='actions')
@@ -735,15 +738,29 @@ class SAC_MULTI(OffPolicyRLModel):
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
 
+            traj_done = True
+            random_weight = False
             for step in range(total_timesteps - loaded_step_num):
                 # Before training starts, randomly sample actions from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy if random_exploration is set to 0 (normal setting)
                 weight, subgoal, id = None, None, None
+                if traj_done is True:
+                    if int(np.random.rand() < 1/3) or random_weight:
+                        sampled_weight = np.random.rand()
+                        bias_idx = [sampled_weight, 1-sampled_weight]
+                        random_weight = True
+                    else:
+                        bias_idx = int(np.random.rand() < 0.5)  # Much faster than the np.random.randint(0,2)
+                        traj_done = False
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
-                    unscaled_action = self.env.action_space.sample()
-                    action = scale_action(self.action_space, unscaled_action)
+                    # unscaled_action = self.env.action_space.sample()
+                    # action = scale_action(self.action_space, unscaled_action)
+
+                    action, subgoal, weight = self.policy_tf.biased_subgoal_step(obs[None], bias_idx)
+                    action = action.flatten()
+                    unscaled_action = unscale_action(self.action_space, action)
                 else:
                     # NOTE: non_subgoal
                     # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
@@ -751,7 +768,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     action, subgoal, weight = self.policy_tf.subgoal_step(obs[None], deterministic=False)
                     # action, subgoal, weight, id = self.policy_tf.subgoal_step_temp(obs[None], deterministic=False)
                     action = action.flatten()
-                    unscaled_action = unscale_action(self.action_space, action)
 
                     # Add noise to the action (improve exploration, not needed in general)
                     if self.action_noise is not None:
@@ -762,6 +778,9 @@ class SAC_MULTI(OffPolicyRLModel):
                 assert action.shape == self.env.action_space.shape
                 
                 new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal, id=id)
+                if done is True:
+                    traj_done = True
+                    random_weight = False
                 self.num_timesteps += 1
 
                 # Only stop training if return value is False, not when it is None. 
@@ -782,13 +801,15 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 else:
                     if type(weight) == dict:
-                        for name, item in weight.items():
-                            if name == 'level1_picking/weight':
-                                weight = weight['level1_picking/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level1_picking/weight'][0][0]]
-                            elif name == 'level1_placing/weight':
-                                weight = weight['level1_placing/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level1_placing/weight'][0][0]]
-                            elif name == 'level2_pickAndplace/weight':
-                                weight = weight['level2_pickAndplace/weight'][0] if (self.SACD or self.mod_SACD) else [weight['level2_pickAndplace/weight'][0][0]]
+                        if self.weightdict_init:
+                            top_level = 0
+                            for key in weight.keys():
+                                level = int(key.split('_')[0][-1])
+                                if top_level <= level:
+                                    top_level = level
+                                    self.top_hierarchy = key
+                            self.weightdict_init = False
+                        weight = weight[self.top_hierarchy][0] if (self.SACD or self.mod_SACD) else [weight[self.top_hierarchy][0][0]]
                     else:
                         weight = [0.5, 0.5] if (self.SACD or self.mod_SACD) else [0.5]
                     self.replay_buffer.add(obs_, weight, reward_, new_obs_, float(done))
@@ -825,10 +846,10 @@ class SAC_MULTI(OffPolicyRLModel):
                         frac = 1.0 - step / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
-                        # if self.num_timesteps < self.learning_starts * 200:
-                        #     mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
-                        # else:
-                        #     mb_infos_vals.append(self._train_step(step, writer, current_lr))
+                        if self.num_timesteps < self.learning_starts:
+                            mb_infos_vals.append(self._train_step(step, writer, current_lr, warmstart=True))
+                        else:
+                            mb_infos_vals.append(self._train_step(step, writer, current_lr))
                         # Update target network
                         if (step + grad_step) % self.target_update_interval == 0:
                             # Update target network
