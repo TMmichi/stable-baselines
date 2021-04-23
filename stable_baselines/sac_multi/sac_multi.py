@@ -123,9 +123,9 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
         self.grad_logger = False
-        self.direct_weight = True
+        self.direct_weight = False
         self.SACD = False
-        self.mod_SACD = True
+        self.mod_SACD = False
         self.weightdict_init = True
         self.top_hierarchy = ''
 
@@ -744,15 +744,18 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Before training starts, randomly sample actions from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy if random_exploration is set to 0 (normal setting)
                 weight, subgoal, id = None, None, None
-                if traj_done is True:
-                    if int(np.random.rand() < 1/3) or random_weight:
-                        sampled_weight = np.random.rand()
-                        bias_idx = [sampled_weight, 1-sampled_weight]
-                        random_weight = True
-                    else:
-                        bias_idx = int(np.random.rand() < 0.5)  # Much faster than the np.random.randint(0,2)
-                        traj_done = False
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
+                    if self.num_timesteps % 100 == 0:
+                        traj_done = True
+                        random_weight = False
+                    if traj_done is True:
+                        if int(np.random.rand() < 1/3) or random_weight:
+                            sampled_weight = np.random.rand()
+                            bias_idx = [sampled_weight, 1-sampled_weight]
+                            random_weight = True
+                        else:
+                            bias_idx = int(np.random.rand() < 0.5)  # Much faster than the np.random.randint(0,2)
+                            traj_done = False
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     # unscaled_action = self.env.action_space.sample()
