@@ -65,7 +65,7 @@ class SAC_MULTI(OffPolicyRLModel):
                  gradient_steps=1, target_entropy='auto', box_dist='gaussian', action_noise=None,
                  random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
-                 seed=None, n_cpu_tf_sess=None, composite_primitive_name=None):
+                 seed=None, n_cpu_tf_sess=None, composite_primitive_name=None, benchmark=False):
 
         super(SAC_MULTI, self).__init__(policy=policy, env=env, replay_buffer=replay_buffer, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs,
@@ -128,6 +128,7 @@ class SAC_MULTI(OffPolicyRLModel):
         self.mod_SACD = False
         self.weightdict_init = True
         self.top_hierarchy = ''
+        self.benchmark = benchmark
 
         if _init_setup_model:
             self.setup_model()
@@ -176,7 +177,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
-                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                    if self.benchmark:
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor_benchmark(self.processed_obs_ph)
+                    else:
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -280,7 +284,6 @@ class SAC_MULTI(OffPolicyRLModel):
                     # Value train op
                     value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     values_params = tf_util.get_trainable_vars('model/values_fn')
-
                     source_params = tf_util.get_trainable_vars("model/values_fn/vf")
                     target_params = tf_util.get_trainable_vars("target/values_fn/vf")
 
