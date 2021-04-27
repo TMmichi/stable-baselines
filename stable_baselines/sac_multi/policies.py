@@ -293,7 +293,7 @@ class FeedForwardPolicy(SACPolicy):
         self.activ_fn = act_fun
         self.selected_idx = None
 
-    def make_actor_benchmark(self, obs=None, reuse=False, scope="agent/main/actor", non_log=False):
+    def make_actor_benchmark(self, obs=None, a_norm=None, reuse=False, scope="agent/main/actor", non_log=False):
         if obs is None:
             obs = self.processed_obs
 
@@ -328,8 +328,8 @@ class FeedForwardPolicy(SACPolicy):
             # Important difference with SAC and other algo such as PPO:
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
             bias_init = np.ones(self.ac_space.shape[0]).astype(np.float32)
-            log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
-            # log_std = tf.get_variable(dtype=tf.float32, name="dist_gauss_diag/logstd/bias", initializer=bias_init, trainable=False)
+            # log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
+            log_std = tf.get_variable(dtype=tf.float32, name="dist_gauss_diag/logstd/bias", initializer=bias_init, trainable=False)
             # log_std = tf.broadcast_to(log_std, tf.shape(mu_))
             self.primitive_log_std['std'] = log_std
 
@@ -342,18 +342,18 @@ class FeedForwardPolicy(SACPolicy):
         self.entropy = gaussian_entropy(log_std)
         
         # Apply squashing and account for it in the probability
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
         
-        self.policy = policy
-        self.deterministic_policy = deterministic_policy
+        self.policy = pi_ * a_norm[1] + a_norm[0]
+        self.deterministic_policy = mu_ * a_norm[1] + a_norm[0]
 
-        return deterministic_policy, policy, logp_pi
+        # return deterministic_policy, policy, logp_pi
+        return self.deterministic_policy, self.policy, logp_pi
 
-    def make_actor(self, obs=None, reuse=False, scope="pi", non_log=False):
+    def make_actor(self, obs=None, a_norm=None, reuse=False, scope="pi", non_log=False):
         if obs is None:
             obs = self.processed_obs
 
-        non_log = False
         with tf.variable_scope(scope, reuse=reuse):
             obs_index = list(range(self.processed_obs.shape[1].value)) if self.obs_index is None else self.obs_index
             obs_relativity = {} if self.obs_relativity is None else self.obs_relativity
@@ -364,7 +364,7 @@ class FeedForwardPolicy(SACPolicy):
             for i in range(len(obs_index)):
                 index_pair[obs_index[i]] = i
                 sieve_layer[obs_index[i]][i] = 1
-            sieved_obs = tf.matmul(tf.layers.flatten(self.processed_obs), sieve_layer)
+            sieved_obs = tf.matmul(tf.layers.flatten(obs), sieve_layer)
             #------------- Observation sieving layer End -------------#
 
             if 'subtract' in obs_relativity.keys():
@@ -414,11 +414,9 @@ class FeedForwardPolicy(SACPolicy):
             self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
             # Important difference with SAC and other algo such as PPO:
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
-            if not non_log:
-                log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
-            else:
-                std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation='relu') + EPS
-                log_std = tf.log(std)
+            bias_init = np.ones(self.ac_space.shape[0]).astype(np.float32)
+            # log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
+            log_std = tf.get_variable(dtype=tf.float32, name="dist_gauss_diag/logstd/bias", initializer=bias_init, trainable=False)
             self.primitive_log_std['std'] = log_std
 
         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -430,12 +428,12 @@ class FeedForwardPolicy(SACPolicy):
         self.entropy = gaussian_entropy(log_std)
         
         # Apply squashing and account for it in the probability
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
         
-        self.policy = policy
-        self.deterministic_policy = deterministic_policy
+        self.policy = pi_ * a_norm[1] + a_norm[0]
+        self.deterministic_policy = mu_ * a_norm[1] + a_norm[0]
 
-        return deterministic_policy, policy, logp_pi
+        return self.deterministic_policy, self.policy, logp_pi
 
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn",
                      create_vf=True, create_qf=True):

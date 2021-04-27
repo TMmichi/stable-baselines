@@ -148,6 +148,16 @@ class SAC_MULTI(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
+                s_size = np.zeros(self.observation_space.shape[0])
+                a_size = np.zeros(self.action_space.shape[0])
+                with tf.variable_scope("agent/resource/s_norm", reuse=False):
+                    self.s_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=s_size.astype(np.float32), trainable=False)
+                    self.s_std = tf.get_variable(dtype=tf.float32, name='std', initializer=s_size.astype(np.float32), trainable=False)
+                with tf.variable_scope("agent/resource/a_norm", reuse=False):
+                    self.a_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=a_size.astype(np.float32), trainable=False)
+                    self.a_std = tf.get_variable(dtype=tf.float32, name='std', initializer=a_size.astype(np.float32), trainable=False)
+                    a_norm = [self.a_mean, self.a_std]
+
                 if self.replay_buffer is None:
                     self.replay_buffer = ReplayBuffer(self.buffer_size)
 
@@ -161,10 +171,13 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     # Initialize Placeholders
                     self.observations_ph = self.policy_tf.obs_ph
+
                     # Normalized observation for pixels
-                    self.processed_obs_ph = self.policy_tf.processed_obs
-                    self.next_observations_ph = self.target_policy.obs_ph
-                    self.processed_next_obs_ph = self.target_policy.processed_obs
+                    # self.processed_obs_ph = self.policy_tf.processed_obs
+                    self.processed_obs_ph = (self.policy_tf.processed_obs-self.s_mean)/self.s_std
+                    self.next_observations_ph = (self.target_policy.obs_ph-self.s_mean)/self.s_std
+                    # self.processed_next_obs_ph = self.target_policy.processed_obs
+                    self.processed_next_obs_ph = (self.target_policy.processed_obs-self.s_mean)/self.s_std
                     self.action_target = self.target_policy.action_ph
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
                     self.rewards_ph = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
@@ -178,9 +191,9 @@ class SAC_MULTI(OffPolicyRLModel):
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
                     if self.benchmark:
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor_benchmark(self.processed_obs_ph)
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor_benchmark(self.processed_obs_ph, a_norm=a_norm)
                     else:
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph, a_norm=a_norm)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -334,7 +347,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
                 # Retrieve parameters that must be saved
-                self.params = tf_util.get_trainable_vars("model")
+                self.normalizer = tf_util.get_globals_vars("agent/resource")
+                self.params = tf_util.get_trainable_vars("model") + self.normalizer
                 self.pi_params = tf_util.get_trainable_vars("model/pi")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
                 variable_list = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
