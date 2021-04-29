@@ -293,64 +293,8 @@ class FeedForwardPolicy(SACPolicy):
         self.activ_fn = act_fun
         self.selected_idx = None
 
-    def make_actor_benchmark(self, obs=None, a_norm=None, reuse=False, scope="agent/main/actor", non_log=False):
-        if obs is None:
-            obs = self.processed_obs
 
-        with tf.variable_scope(scope, reuse=reuse):
-            obs_index = list(range(self.processed_obs.shape[1].value)) if self.obs_index is None else self.obs_index
-
-            #------------- Input observation sieving layer -------------#
-            index_pair = {}
-            sieve_layer = np.zeros([self.processed_obs.shape[1].value, len(obs_index)], dtype=np.float32)
-            for i in range(len(obs_index)):
-                index_pair[obs_index[i]] = i
-                sieve_layer[obs_index[i]][i] = 1
-            print(sieve_layer.shape)
-            sieved_obs = tf.matmul(tf.layers.flatten(self.processed_obs), sieve_layer)
-            #------------- Observation sieving layer End -------------#
-
-            new_obs = sieved_obs
-            pi_h = tf.layers.flatten(new_obs)
-            pi_h = tf.layers.dense(inputs=pi_h,
-                                    units=1024,
-                                    kernel_initializer=tf.contrib.layers.xavier_initializer(),
-                                    activation=tf.nn.relu,
-                                    name='0/dense')
-            pi_h = tf.layers.dense(inputs=pi_h, 
-                                    units=512,
-                                    kernel_initializer=tf.contrib.layers.xavier_initializer(),
-                                    activation=None,
-                                    name='1/dense')
-            pi_h = tf.nn.relu(pi_h)
-
-            self.act_mu = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/mean')
-            # Important difference with SAC and other algo such as PPO:
-            # the std depends on the state, so we cannot use stable_baselines.common.distribution
-            bias_init = np.ones(self.ac_space.shape[0]).astype(np.float32)
-            # log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
-            log_std = tf.get_variable(dtype=tf.float32, name="dist_gauss_diag/logstd/bias", initializer=bias_init, trainable=False)
-            # log_std = tf.broadcast_to(log_std, tf.shape(mu_))
-            self.primitive_log_std['std'] = log_std
-
-        log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
-
-        self.std = std = tf.exp(log_std)
-        # Reparameterization trick
-        pi_ = mu_ + tf.random_normal(tf.shape(mu_)) * std
-        logp_pi = gaussian_likelihood(pi_, mu_, log_std)
-        self.entropy = gaussian_entropy(log_std)
-        
-        # Apply squashing and account for it in the probability
-        # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
-        
-        self.policy = pi_ * a_norm[1] + a_norm[0]
-        self.deterministic_policy = mu_ * a_norm[1] + a_norm[0]
-
-        # return deterministic_policy, policy, logp_pi
-        return self.deterministic_policy, self.policy, logp_pi
-
-    def make_actor(self, obs=None, a_norm=None, reuse=False, scope="pi", non_log=False):
+    def make_actor(self, obs=None, a_norm=None, reuse=False, scope="pi"):
         if obs is None:
             obs = self.processed_obs
 
@@ -405,10 +349,13 @@ class FeedForwardPolicy(SACPolicy):
             if self.feature_extraction == "cnn":
                 pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
             else:
-                # pi_h = tf.layers.flatten(obs)
-                # new_obs = tf.Print(new_obs, [new_obs,], 'subs obs', summarize=-1)
+                s_mean_init = np.zeros(new_obs.shape[1])
+                s_std_init = np.ones(new_obs.shape[1])
+                with tf.variable_scope("s_norm", reuse=False):
+                    s_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=s_mean_init.astype(np.float32), trainable=True)
+                    s_std = tf.get_variable(dtype=tf.float32, name='std', initializer=s_std_init.astype(np.float32), trainable=True)
+                new_obs = (new_obs-s_mean)/s_std
                 pi_h = tf.layers.flatten(new_obs)
-            # pi_h = tf.Print(pi_h, [pi_h,], 'obs: ', summarize=-1)
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
             self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
@@ -416,7 +363,7 @@ class FeedForwardPolicy(SACPolicy):
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
             bias_init = np.ones(self.ac_space.shape[0]).astype(np.float32)
             # log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
-            log_std = tf.get_variable(dtype=tf.float32, name="dist_gauss_diag/logstd/bias", initializer=bias_init, trainable=False)
+            log_std = tf.get_variable(dtype=tf.float32, name="dense_1/bias", initializer=bias_init, trainable=True)
             self.primitive_log_std['std'] = log_std
 
         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -429,9 +376,14 @@ class FeedForwardPolicy(SACPolicy):
         
         # Apply squashing and account for it in the probability
         # deterministic_policy, policy, logp_pi = apply_squashing_func(mu_, pi_, logp_pi)
+        a_mean_init = np.zeros(mu_.shape[1])
+        a_std_init = np.ones(mu_.shape[1])
+        with tf.variable_scope(scope+"/a_norm", reuse=False):
+            a_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=a_mean_init.astype(np.float32), trainable=True)
+            a_std = tf.get_variable(dtype=tf.float32, name='std', initializer=a_std_init.astype(np.float32), trainable=True)
         
-        self.policy = pi_ * a_norm[1] + a_norm[0]
-        self.deterministic_policy = mu_ * a_norm[1] + a_norm[0]
+        self.policy = pi_ * a_std + a_mean
+        self.deterministic_policy = mu_ * a_std + a_mean
 
         return self.deterministic_policy, self.policy, logp_pi
 
@@ -546,30 +498,19 @@ class FeedForwardPolicy(SACPolicy):
             else:
                 pi_MCP, mu_MCP, log_std_MCP, [pi_0, mu_0, log_std_0], [pi_1, mu_1, log_std_1], [pi_ph, mu_ph, log_std_ph] = \
                     self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-                logp_pi_0 = gaussian_likelihood(pi_0, mu_0, log_std_0)
-                logp_pi_1 = gaussian_likelihood(pi_1, mu_1, log_std_1)
-                logp_pi_ph = gaussian_likelihood(pi_ph, mu_ph, log_std_ph)
-                _, policy_0, logp_pi_0 = apply_squashing_func(mu_0, pi_0, logp_pi_0)
-                _, policy_1, logp_pi_1 = apply_squashing_func(mu_1, pi_1, logp_pi_1)
-                _, policy_ph, logp_pi_ph = apply_squashing_func(mu_ph, pi_ph, logp_pi_ph)
-                self.policy_0 = policy_0
-                self.policy_1 = policy_1
-                self.policy_ph = policy_ph
+                self.policy_0 = pi_0
+                self.policy_1 = pi_1
+                self.policy_ph = pi_ph
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         
         self.entropy = gaussian_entropy(log_std_MCP)
         self.std = tf.exp(log_std_MCP)
-
-        # policies with squashing func at test time
-        deterministic_policy, policy, logp_pi = apply_squashing_func(mu_MCP, pi_MCP, logp_pi)
         
-        # weight_val = [self.weight[name] for name in self.weight.keys()]
-        # policy = tf.Print(policy,[mu_MCP, self.std, pi_MCP, logp_pi, weight_val], "mu, std, pi, logpi, weight: ", summarize=-1)
-        self.policy = policy
-        self.deterministic_policy = deterministic_policy
+        self.policy = pi_MCP
+        self.deterministic_policy = mu_MCP
 
-        return deterministic_policy, policy, logp_pi
+        return self.deterministic_policy, self.policy, logp_pi
  
     def make_HPC_critics(self, obs=None, action=None, primitives=None, tails=None, scope="values_fn", reuse=False, 
                     create_vf=True, create_qf=True, weight=False, SACD=True):
@@ -706,6 +647,12 @@ class FeedForwardPolicy(SACPolicy):
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
                             raise NotImplementedError("Image input not supported for now")
                         else:
+                            s_mean_init = np.zeros(new_obs.shape[1])
+                            s_std_init = np.ones(new_obs.shape[1])
+                            with tf.variable_scope("s_norm", reuse=False):
+                                s_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=s_mean_init.astype(np.float32), trainable=True)
+                                s_std = tf.get_variable(dtype=tf.float32, name='std', initializer=s_std_init.astype(np.float32), trainable=True)
+                            new_obs = (new_obs-s_mean)/s_std
                             pi_h = tf.layers.flatten(new_obs)
                         
                         #------------- Input observation sieving layer -------------#
@@ -747,14 +694,16 @@ class FeedForwardPolicy(SACPolicy):
                         pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
 
                         # if aux, then the produced action becomes scaled
-                        # TODO(tmmichi): constant action scale with 0.1 does not represent same effect after being squashed
-                        mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)                        
+                        mu_ = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None) * prim_dict.get('act_scale',1)
+                        a_mean_init = np.zeros(len(prim_dict['act'][1]))
+                        a_std_init = np.ones(len(prim_dict['act'][1]))
+                        with tf.variable_scope("a_norm", reuse=False):
+                            a_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=a_mean_init.astype(np.float32), trainable=True)
+                            a_std = tf.get_variable(dtype=tf.float32, name='std', initializer=a_std_init.astype(np.float32), trainable=True)
+                        mu_ = mu_ * a_std + a_mean
 
-                        if not non_log:
-                            log_std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation=None)
-                        else:
-                            std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='relu') + EPS
-                            log_std = tf.log(std)
+                        bias_init = np.ones(len(prim_dict['act'][1])).astype(np.float32)
+                        log_std = tf.get_variable(dtype=tf.float32, name="dense_1/bias", initializer=bias_init, trainable=True)
 
                         mu_array.append(mu_)
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)

@@ -77,12 +77,6 @@ class SAC_MULTI(OffPolicyRLModel):
         self.train_freq = train_freq
         self.batch_size = batch_size
         self.tau = tau
-        # In the original paper, same learning rate is used for all networks
-        # self.policy_lr = learning_rate
-        # self.qf_lr = learning_rate
-        # self.vf_lr = learning_rate
-        # Entropy coefficient / Entropy temperature
-        # Inverse of the reward scale
         self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
@@ -123,9 +117,9 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
         self.grad_logger = False
-        self.direct_weight = False
+        self.direct_weight = True
         self.SACD = False
-        self.mod_SACD = False
+        self.mod_SACD = True
         self.weightdict_init = True
         self.top_hierarchy = ''
         self.benchmark = benchmark
@@ -148,15 +142,6 @@ class SAC_MULTI(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
-                s_size = np.zeros(self.observation_space.shape[0])
-                a_size = np.zeros(self.action_space.shape[0])
-                with tf.variable_scope("agent/resource/s_norm", reuse=False):
-                    self.s_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=s_size.astype(np.float32), trainable=False)
-                    self.s_std = tf.get_variable(dtype=tf.float32, name='std', initializer=s_size.astype(np.float32), trainable=False)
-                with tf.variable_scope("agent/resource/a_norm", reuse=False):
-                    self.a_mean = tf.get_variable(dtype=tf.float32, name='mean', initializer=a_size.astype(np.float32), trainable=False)
-                    self.a_std = tf.get_variable(dtype=tf.float32, name='std', initializer=a_size.astype(np.float32), trainable=False)
-                    a_norm = [self.a_mean, self.a_std]
 
                 if self.replay_buffer is None:
                     self.replay_buffer = ReplayBuffer(self.buffer_size)
@@ -173,11 +158,8 @@ class SAC_MULTI(OffPolicyRLModel):
                     self.observations_ph = self.policy_tf.obs_ph
 
                     # Normalized observation for pixels
-                    # self.processed_obs_ph = self.policy_tf.processed_obs
-                    self.processed_obs_ph = (self.policy_tf.processed_obs-self.s_mean)/self.s_std
-                    self.next_observations_ph = (self.target_policy.obs_ph-self.s_mean)/self.s_std
-                    # self.processed_next_obs_ph = self.target_policy.processed_obs
-                    self.processed_next_obs_ph = (self.target_policy.processed_obs-self.s_mean)/self.s_std
+                    self.processed_obs_ph = self.policy_tf.processed_obs
+                    self.processed_next_obs_ph = self.target_policy.processed_obs
                     self.action_target = self.target_policy.action_ph
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
                     self.rewards_ph = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
@@ -190,10 +172,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probability of actions taken by the policy
-                    if self.benchmark:
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor_benchmark(self.processed_obs_ph, a_norm=a_norm)
-                    else:
-                        self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph, a_norm=a_norm)
+                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -347,8 +326,7 @@ class SAC_MULTI(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
                 # Retrieve parameters that must be saved
-                self.normalizer = tf_util.get_globals_vars("agent/resource")
-                self.params = tf_util.get_trainable_vars("model") + self.normalizer
+                self.params = tf_util.get_trainable_vars("model")
                 self.pi_params = tf_util.get_trainable_vars("model/pi")
                 self.target_params = tf_util.get_trainable_vars("target/values_fn/vf")
                 variable_list = tf_util.get_trainable_vars('') + tf_util.get_globals_vars('')
@@ -780,7 +758,6 @@ class SAC_MULTI(OffPolicyRLModel):
 
                     action, subgoal, weight = self.policy_tf.biased_subgoal_step(obs[None], bias_idx)
                     action = action.flatten()
-                    unscaled_action = unscale_action(self.action_space, action)
                 else:
                     # NOTE: non_subgoal
                     # action = self.policy_tf.step(obs[None], deterministic=False).flatten()
@@ -789,15 +766,10 @@ class SAC_MULTI(OffPolicyRLModel):
                     # action, subgoal, weight, id = self.policy_tf.subgoal_step_temp(obs[None], deterministic=False)
                     action = action.flatten()
 
-                    # Add noise to the action (improve exploration, not needed in general)
-                    if self.action_noise is not None:
-                        action = np.clip(action + self.action_noise(), -1, 1)
-                    # inferred actions need to be transformed to environment action_space before stepping
-                    unscaled_action = unscale_action(self.action_space, action)
-
                 assert action.shape == self.env.action_space.shape
                 
-                new_obs, reward, done, info = self.env.step(unscaled_action, weight=weight, subgoal=subgoal, id=id)
+                new_obs, reward, done, info = self.env.step(action, weight=weight, subgoal=subgoal, id=id)
+                # print(reward, done, weight)
                 if done is True:
                     traj_done = True
                     random_weight = False
@@ -961,7 +933,6 @@ class SAC_MULTI(OffPolicyRLModel):
         
         return actions, subgoal, weight
 
-    
     def get_weight(self, observation):
         observation = np.array(observation)
         observation = observation.reshape((-1,) + self.observation_space.shape)
