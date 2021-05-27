@@ -123,9 +123,9 @@ class SAC_MULTI(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
         self.grad_logger = False
-        self.direct_weight = False
+        self.direct_weight = True
         self.SACD = False
-        self.mod_SACD = False
+        self.mod_SACD = True
         self.weightdict_init = True
         self.top_hierarchy = ''
 
@@ -496,7 +496,11 @@ class SAC_MULTI(OffPolicyRLModel):
                                 # NOTE: Tiled Q setting
                                 Q_tile = tf.tile(tf.reshape(qf1_pi,[-1,1]),tf.constant([1,weight_dim]))
                                 dotp = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight - Q_tile), axis=-1)
+
+                                dotp_noQ = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight), axis=-1)
                                 policy_kl_loss = tf.reduce_mean(dotp, axis=-1)
+                                qloss = tf.reduce_sum(policy_out*(- Q_tile), axis=-1)
+                                policy_kl_loss_noQ = tf.reduce_mean(dotp_noQ, axis=-1)
 
                                 # NOTE: one Q setting
                                 #wdotp = tf.reduce_sum(policy_out*(self.ent_coef * logp_weight), axis=-1)
@@ -505,6 +509,8 @@ class SAC_MULTI(OffPolicyRLModel):
                             else:
                                 policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_weight - qf1_pi)
                         policy_loss = policy_kl_loss
+                        policy_loss_noQ = policy_kl_loss_noQ
+                        q_loss_noQ = qloss
 
                         # Target for value fn regression
                         # We update the vf towards the min of two Q-functions in order to
@@ -538,6 +544,26 @@ class SAC_MULTI(OffPolicyRLModel):
                                     pass
                                 self.grad_logger_op[grad[1].name] = grad[1]
                         policy_train_op = policy_optimizer.apply_gradients(grads)
+
+                        grads_noQ = policy_optimizer.compute_gradients(policy_loss_noQ, var_list=policy_var_list)
+                        if self.grad_logger:
+                            self.grad_logger_noQ_op = {}
+                            for grad in grads_noQ:
+                                try:
+                                    self.grad_logger_noQ_op[grad[0].name] = grad[0]
+                                except Exception:
+                                    pass
+                                self.grad_logger_noQ_op[grad[1].name] = grad[1]
+                        
+                        grads_Q = policy_optimizer.compute_gradients(q_loss_noQ, var_list=policy_var_list)
+                        if self.grad_logger:
+                            self.grad_logger_Q_op = {}
+                            for grad in grads_Q:
+                                try:
+                                    self.grad_logger_Q_op[grad[0].name] = grad[0]
+                                except Exception:
+                                    pass
+                                self.grad_logger_Q_op[grad[1].name] = grad[1]
 
                         # Value train op
                         value_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -647,12 +673,37 @@ class SAC_MULTI(OffPolicyRLModel):
         if writer is not None:
             if self.grad_logger:
                 logger = self.sess.run(self.grad_logger_op, feed_dict)
+                logger2 = self.sess.run(self.grad_logger_noQ_op, feed_dict)
+                logger3 = self.sess.run(self.grad_logger_Q_op, feed_dict)
 
                 self.file_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
                 self.file_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
                 self.file_mean_logger.writelines('######################### STEP: {}'.format(step)+' #########################\n')
                 self.file_mean_logger.writelines('DATA: '+str(np.mean(batch_obs))+', '+str(np.mean(batch_actions))+', '+str(np.mean(batch_rewards))+', '+str(np.mean(batch_next_obs))+'\n')
+                self.file_logger.writelines('########### logger ###########\n')
                 for name, item in logger.items():
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    # self.file_logger.writelines(str(item))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines('\n')
+                self.file_logger.writelines('########### logger_noQ ###########\n')
+                for name, item in logger2.items():
+                    self.file_logger.writelines(str(name)+'\n')
+                    self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
+                    # self.file_logger.writelines(str(item))
+                    self.file_logger.writelines('\n')
+                    self.file_mean_logger.writelines(str(name)+'\n')
+                    self.file_mean_logger.writelines(str(np.mean(item)))
+                    self.file_mean_logger.writelines('\n')
+                self.file_logger.writelines('\n')
+                self.file_mean_logger.writelines('\n')
+                self.file_logger.writelines('########### logger_Q ###########\n')
+                for name, item in logger3.items():
                     self.file_logger.writelines(str(name)+'\n')
                     self.file_logger.writelines(str(np.mean(item, axis=len(item.shape[:])-1)))
                     # self.file_logger.writelines(str(item))
