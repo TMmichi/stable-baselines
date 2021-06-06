@@ -262,7 +262,6 @@ class FeedForwardPolicy(SACPolicy):
                                                 reuse=reuse, scale=(feature_extraction == "cnn"), obs_phs=obs_phs)
 
         self._kwargs_check(feature_extraction, kwargs)
-        self.dist = None
         self.layer_norm = layer_norm
         self.feature_extraction = feature_extraction
         self.cnn_kwargs = kwargs
@@ -283,11 +282,6 @@ class FeedForwardPolicy(SACPolicy):
         self.weight_1 = {}
         self.weight_ph = {}
         self.subgoal = {}
-        self.primitive_actions = {}
-        self.primitive_log_std = {}
-        self.primitive_value = {}
-        self.primitive_qf1 = {}
-        self.primitive_qf2 = {}
         self.reg_loss = None
         self.reg_weight = reg_weight
         self.activ_fn = act_fun
@@ -358,13 +352,12 @@ class FeedForwardPolicy(SACPolicy):
                 pi_h = tf.layers.flatten(new_obs)
             pi_h = mlp(pi_h, self.policy_layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            self.act_mu = self.primitive_actions['mu_'] = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
+            self.act_mu = mu_ = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None)
             # Important difference with SAC and other algo such as PPO:
             # the std depends on the state, so we cannot use stable_baselines.common.distribution
             bias_init = np.ones(self.ac_space.shape[0]).astype(np.float32)
             # log_std = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=None, name='dist_gauss_diag/logstd')
             log_std = tf.get_variable(dtype=tf.float32, name="dense_1/bias", initializer=bias_init, trainable=True)
-            self.primitive_log_std['std'] = log_std
 
         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
@@ -485,22 +478,21 @@ class FeedForwardPolicy(SACPolicy):
         :param scope: (str) the scope name of the actor
         :return: (TensorFlow Tensor) the output tensor
         """
-        non_log = True
         self.weight_0_ph = tf.placeholder(tf.float32, shape=[], name='weight_0')
         self.weight_1_ph = tf.placeholder(tf.float32, shape=[], name='weight_1')
 
         if obs is None:
             obs = self.processed_obs
         with tf.variable_scope(scope, reuse=reuse):
-            if loaded:
-                pi_MCP, mu_MCP, log_std_MCP = \
-                    self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-            else:
-                pi_MCP, mu_MCP, log_std_MCP, [pi_0, mu_0, log_std_0], [pi_1, mu_1, log_std_1], [pi_ph, mu_ph, log_std_ph] = \
-                    self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-                self.policy_0 = pi_0
-                self.policy_1 = pi_1
-                self.policy_ph = pi_ph
+            # if loaded:
+            #     pi_MCP, mu_MCP, log_std_MCP = \
+            #         self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse)
+            # else:
+            pi_MCP, mu_MCP, log_std_MCP, [pi_0, mu_0, log_std_0], [pi_1, mu_1, log_std_1], [pi_ph, mu_ph, log_std_ph] = \
+                self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, loaded)
+            self.policy_0 = pi_0
+            self.policy_1 = pi_1
+            self.policy_ph = pi_ph
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
         
@@ -549,7 +541,7 @@ class FeedForwardPolicy(SACPolicy):
 
         return self.qf1, self.qf2, self.value_fn
 
-    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
+    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, loaded=False):
         print("Received tails in actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
@@ -560,7 +552,7 @@ class FeedForwardPolicy(SACPolicy):
         weight = None
         weight_biased = False
 
-        # Meta-controller Initialization
+        # Meta-policy Initialization
         for name in tails:
             if 'weight' in name.split('/'):
                 print('Graph of '+name+' initializing')
@@ -586,7 +578,7 @@ class FeedForwardPolicy(SACPolicy):
                     self.weight[name] = weight
 
                     # NOTE: biased weight
-                    if main_tail:
+                    if main_tail or loaded:
                         weight_biased = True
                         weight_bias = tf.layers.dense(pi_h, 1, activation='softmax')
                         weight_ones = tf.ones_like(weight_bias) * (1-weight_EPS)
@@ -709,16 +701,13 @@ class FeedForwardPolicy(SACPolicy):
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                         log_std_array.append(log_std)
                         act_index.append(prim_dict['act'][1])
-                        
-                        self.primitive_actions[name] = mu_
-                        self.primitive_log_std[name] = log_std
 
                         tf.summary.merge_all()
                     print('\t' + name + " constructed")
             else:
                 if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
-                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, prim_dict['tails'], total_action_dimension, reuse, non_log)
+                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, prim_dict['tails'], total_action_dimension, reuse)
                     mu_array.append(mu_)
                     log_std_array.append(log_std_)
                     act_index.append(prim_dict['act'][1])
@@ -770,7 +759,6 @@ class FeedForwardPolicy(SACPolicy):
                             vf_h = mlp(critics_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                             value_fn = tf.layers.dense(vf_h, 1, name="vf")
                             self.value_fn += value_fn
-                            self.primitive_value[layer_name] = value_fn
 
                         if create_qf:
                             if not weight:
@@ -790,11 +778,9 @@ class FeedForwardPolicy(SACPolicy):
                             if qf1:
                                 qf = tf.layers.dense(qf_h, 1, name="qf1")
                                 self.qf1 += qf
-                                self.primitive_qf1[layer_name] = qf
                             if qf2:
                                 qf = tf.layers.dense(qf_h, 1, name="qf2")
                                 self.qf2 += qf
-                                self.primitive_qf2[layer_name] = qf
                 else:
                     with tf.variable_scope(layer_name, reuse=reuse):
                         self.construct_value_graph(obs, action, primitives, prim_dict['tails'], reuse, create_vf, create_qf, qf1, qf2)
@@ -821,7 +807,6 @@ class FeedForwardPolicy(SACPolicy):
                         vf_h = mlp(critics_h, prim_dict['layer']['value'], self.activ_fn, layer_norm=self.layer_norm)
                         value_fn = tf.layers.dense(vf_h, 1, name="vf")
                         self.value_fn += value_fn
-                        self.primitive_value[layer_name] = value_fn
 
                     if create_qf:
                         if not weight:
@@ -841,11 +826,9 @@ class FeedForwardPolicy(SACPolicy):
                         if qf1:
                             qf = tf.layers.dense(qf_h, weight_dim, name="qf1")
                             self.qf1 += qf
-                            self.primitive_qf1[layer_name] = qf
                         if qf2:
                             qf = tf.layers.dense(qf_h, weight_dim, name="qf2")
                             self.qf2 += qf
-                            self.primitive_qf2[layer_name] = qf
 
     def step(self, obs, state=None, mask=None, deterministic=False):
         if deterministic:
@@ -857,11 +840,6 @@ class FeedForwardPolicy(SACPolicy):
             return self.sess.run([self.deterministic_policy, self.subgoal, self.weight], {self.obs_ph: obs})
         return self.sess.run([self.policy, self.subgoal, self.weight], {self.obs_ph: obs})
     
-    def subgoal_step_temp(self, obs, state=None, mask=None, deterministic=False):
-        if deterministic:
-            return self.sess.run([self.deterministic_policy, self.subgoal, self.weight, self.selected_idx], {self.obs_ph: obs})
-        return self.sess.run([self.policy, self.subgoal, self.weight, self.selected_idx], {self.obs_ph: obs})
-    
     def biased_subgoal_step(self, obs, index):
         if index == 0:
             return self.sess.run([self.policy_0, self.subgoal, self.weight_0], {self.obs_ph: obs})
@@ -870,9 +848,6 @@ class FeedForwardPolicy(SACPolicy):
         elif type(index) == list:
             return self.sess.run([self.policy_ph, self.subgoal, self.weight_ph], \
                 {self.obs_ph: obs, self.weight_0_ph: index[0],self.weight_1_ph: index[1]})
-    
-    def get_weight(self, obs):
-        return self.sess.run(self.weight, {self.obs_ph: obs})
     
     def get_tf_weight(self):
         return self.weight_tf
@@ -886,17 +861,8 @@ class FeedForwardPolicy(SACPolicy):
     def get_sliced_log_weight(self):
         return tf.slice(self.log_weight, [0, 0], [-1,1])
 
-    def get_primitive_action(self, obs):
-        return self.sess.run(self.primitive_actions, {self.obs_ph: obs})
-
-    def get_primitive_log_std(self, obs):
-        return self.sess.run(self.primitive_log_std, {self.obs_ph: obs})
-
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run([self.act_mu, self.std], {self.obs_ph: obs})
-    
-    def kl(self, other):
-        return self.dist.kl_divergence(other.dist)
 
 
 class CnnPolicy(FeedForwardPolicy):

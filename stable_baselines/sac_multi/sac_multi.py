@@ -874,6 +874,7 @@ class SAC_MULTI(OffPolicyRLModel):
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
+                    logger.logkv("ID", save_path.split('/')[-1])
                     logger.logkv("episodes", num_episodes)
                     logger.logkv("mean 100 episode reward", mean_reward)
                     if len(self.ep_info_buf) > 0 and len(self.ep_info_buf[0]) > 0:
@@ -920,6 +921,19 @@ class SAC_MULTI(OffPolicyRLModel):
 
         return actions, None
     
+    def predict_biased(self, observation, index=[0.5,0.5]):
+        observation = np.array(observation)
+        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
+
+        observation = observation.reshape((-1,) + self.observation_space.shape)
+        actions, _, weight = self.policy_tf.biased_subgoal_step(observation, index=index)
+        actions = actions.reshape((-1,) + self.action_space.shape)  # reshape to the correct action shape
+        actions = unscale_action(self.action_space, actions) # scale the output for the prediction
+        if not vectorized_env:
+            actions = actions[0]
+
+        return actions, weight
+    
     def predict_subgoal(self, observation, deterministic=True):
         observation = np.array(observation)
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
@@ -932,26 +946,6 @@ class SAC_MULTI(OffPolicyRLModel):
             actions = actions[0]
         
         return actions, subgoal, weight
-
-    def get_weight(self, observation):
-        observation = np.array(observation)
-        observation = observation.reshape((-1,) + self.observation_space.shape)
-        return self.policy_tf.get_weight(observation)
-    
-    def get_primitive_action(self, observation):
-        observation = np.array(observation)
-        observation = observation.reshape((-1,) + self.observation_space.shape)
-        return self.policy_tf.get_primitive_action(observation)
-    
-    def get_primitive_log_std(self, observation):
-        observation = np.array(observation)
-        observation = observation.reshape((-1,) + self.observation_space.shape)
-        return self.policy_tf.get_primitive_log_std(observation)
-    
-    def get_primitive_param(self, observation):
-        observation = np.array(observation)
-        observation = observation.reshape((-1,) + self.observation_space.shape)
-        return self.policy_tf.get_primitive_param(observation)
 
     def get_parameter_list(self):
         return (self.params +
