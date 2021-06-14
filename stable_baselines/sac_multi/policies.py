@@ -10,7 +10,7 @@ from stable_baselines.common.policies import BasePolicy, nature_cnn, register_po
 from stable_baselines.common.tf_layers import mlp
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
-weight_EPS = 1e-10
+WEIGHT_EPS = 1e-10
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 5
 LOG_STD_MIN = -5
@@ -279,8 +279,6 @@ class FeedForwardPolicy(SACPolicy):
         self.obs_relativity = kwargs.get('obs_relativity', {})
         self.obs_index = kwargs.get('obs_index',None)
         self.weight = {}
-        self.weight_0 = {}
-        self.weight_1 = {}
         self.weight_ph = {}
         self.subgoal = {}
         self.primitive_actions = {}
@@ -489,26 +487,18 @@ class FeedForwardPolicy(SACPolicy):
         :return: (TensorFlow Tensor) the output tensor
         """
         non_log = True
-        self.weight_0_ph = tf.placeholder(tf.float32, shape=[], name='weight_0')
-        self.weight_1_ph = tf.placeholder(tf.float32, shape=[], name='weight_1')
 
         if obs is None:
             obs = self.processed_obs
         with tf.variable_scope(scope, reuse=reuse):
             if loaded:
                 pi_MCP, mu_MCP, log_std_MCP = \
-                    self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
+                    self.construct_actor_graph(obs, primitives, tails, reuse, non_log)
             else:
-                pi_MCP, mu_MCP, log_std_MCP, [pi_0, mu_0, log_std_0], [pi_1, mu_1, log_std_1], [pi_ph, mu_ph, log_std_ph] = \
-                    self.construct_actor_graph(obs, primitives, tails, total_action_dimension, reuse, non_log)
-                logp_pi_0 = gaussian_likelihood(pi_0, mu_0, log_std_0)
-                logp_pi_1 = gaussian_likelihood(pi_1, mu_1, log_std_1)
+                pi_MCP, mu_MCP, log_std_MCP, [pi_ph, mu_ph, log_std_ph] = \
+                    self.construct_actor_graph(obs, primitives, tails, reuse, non_log)
                 logp_pi_ph = gaussian_likelihood(pi_ph, mu_ph, log_std_ph)
-                _, policy_0, logp_pi_0 = apply_squashing_func(mu_0, pi_0, logp_pi_0)
-                _, policy_1, logp_pi_1 = apply_squashing_func(mu_1, pi_1, logp_pi_1)
                 _, policy_ph, logp_pi_ph = apply_squashing_func(mu_ph, pi_ph, logp_pi_ph)
-                self.policy_0 = policy_0
-                self.policy_1 = policy_1
                 self.policy_ph = policy_ph
 
         logp_pi = gaussian_likelihood(pi_MCP, mu_MCP, log_std_MCP)
@@ -563,8 +553,9 @@ class FeedForwardPolicy(SACPolicy):
 
         return self.qf1, self.qf2, self.value_fn
 
-    def construct_actor_graph(self, obs=None, primitives=None, tails=None, total_action_dimension=0, reuse=False, non_log=False):
-        print("Received tails in actor graph: ",tails)
+    def construct_actor_graph(self, obs=None, primitives=None, tails=None, reuse=False, non_log=False, floor=0):
+        print()
+        print('\t'*floor + "Received tails in actor graph: ",tails)
         if obs is None:
             obs = self.processed_obs
 
@@ -577,7 +568,7 @@ class FeedForwardPolicy(SACPolicy):
         # Meta-controller Initialization
         for name in tails:
             if 'weight' in name.split('/'):
-                print('Graph of '+name+' initializing')
+                print('\t'*floor + 'Graph of '+name+' initializing')
                 prim_dict = primitives[name]
                 main_tail = True if prim_dict['main_tail'] else False
                 layer_name = prim_dict['layer_name'] if main_tail else name
@@ -596,28 +587,27 @@ class FeedForwardPolicy(SACPolicy):
                     #------------- Observation sieving layer End -------------#
                     pi_h = mlp(pi_h, prim_dict['layer']['policy'], self.activ_fn, layer_norm=self.layer_norm)
                     weight = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='softmax')
-                    weight = tf.clip_by_value(weight, weight_EPS, 1-weight_EPS)
+                    weight = tf.clip_by_value(weight, WEIGHT_EPS, 1-WEIGHT_EPS)
                     self.weight[name] = weight
+                    composite_action_dim = len(prim_dict['composite_action_index'])
 
                     # NOTE: biased weight
                     if main_tail:
                         weight_biased = True
                         weight_bias = tf.layers.dense(pi_h, 1, activation='softmax')
-                        weight_ones = tf.ones_like(weight_bias) * (1-weight_EPS)
-                        weight_zeros = tf.zeros_like(weight_bias) * weight_EPS
-                        weight_bias_0 = tf.concat([weight_ones,weight_zeros], axis=-1)
-                        weight_bias_1 = tf.concat([weight_zeros,weight_ones], axis=-1)
-                        weight_ph_0 = tf.ones_like(weight_bias) * self.weight_0_ph
-                        weight_ph_1 = tf.ones_like(weight_bias) * self.weight_1_ph
-                        weight_bias_ph = tf.concat([weight_ph_0, weight_ph_1], axis=-1)
-                        self.weight_0[name] = weight_bias_0
-                        self.weight_1[name] = weight_bias_1
+                        self.weight_idx_ph_arr = []
+                        weight_bias_ph_arr = []
+                        for i in range(len(prim_dict['act'][1])):
+                            weight_idx_ph = tf.placeholder(tf.float32, shape=[], name='weight_'+str(i))
+                            self.weight_idx_ph_arr.append(weight_idx_ph)
+                            weight_bias_ph_arr.append(tf.ones_like(weight_bias)*weight_idx_ph)
+                        # weight_ph_0 = tf.ones_like(weight_bias) * self.weight_0_ph
+                        # weight_ph_1 = tf.ones_like(weight_bias) * self.weight_1_ph
+                        weight_bias_ph = tf.concat(weight_bias_ph_arr, axis=-1)
                         self.weight_ph[name] = weight_bias_ph
                         self.weight_tf = weight
                         self.log_weight = tf.log(weight)
                     else:
-                        self.weight_0[name] = weight
-                        self.weight_1[name] = weight
                         self.weight_ph[name] = weight
                     
                     subgoal_dict = {}
@@ -630,7 +620,7 @@ class FeedForwardPolicy(SACPolicy):
                                 self.subgoal[prim_name] = subgoal_obs
                                 # subgoal index: in an increasing order of observation
                                 subgoal_dict[prim_name] = [subgoal_obs, obs_idx]
-                    print(name + " constructed")
+                    print('\t'*floor + name + " constructed\n")
                 break
         else:
             raise NotImplementedError("\n\t\033[91m[ERROR]:Weight layer not in tail\033[0m")
@@ -638,8 +628,8 @@ class FeedForwardPolicy(SACPolicy):
         # Primitive setup
         for name in tails:
             prim_dict = primitives[name]
-            print("main tail: ",prim_dict['main_tail'])
-            print("current name: ", name)
+            print('\t'*floor + "Current tail name: ", name)
+            print('\t'*floor + "Main tail?: ",prim_dict['main_tail'])
             layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
             if subgoal_dict.get(name, None) is not None:
                 # subgoal_dict from weight initialization
@@ -655,7 +645,7 @@ class FeedForwardPolicy(SACPolicy):
 
             if prim_dict['tails'] == None:
                 if 'weight' not in name.split('/'):
-                    print('\tGraph of ' + name + ' initializing...')
+                    print('\t'*floor + 'Graph of ' + name + ' initializing...')
                     with tf.variable_scope(layer_name, reuse=reuse):
                         if self.feature_extraction == "cnn":
                             pi_h = self.cnn_extractor(new_obs, **self.cnn_kwargs)
@@ -673,9 +663,9 @@ class FeedForwardPolicy(SACPolicy):
                         #------------- Observation sieving layer End -------------#
 
                         if 'subtract' in prim_dict['obs_relativity'].keys():
-                            print("\tIN SUBTRACT")
+                            print('\t'*floor + "IN SUBTRACT")
                             ref = prim_dict['obs_relativity']['subtract']['ref']
-                            print('ref: ', ref)
+                            print('\t'*floor + 'ref: ', ref)
                             tar = prim_dict['obs_relativity']['subtract']['tar']
                             assert len(ref) == len(tar), "Error: length of reference and target indicies unidentical"
                             ref_sieve = np.zeros([pi_h.shape[1].value, len(ref)], dtype=np.float32)
@@ -710,8 +700,9 @@ class FeedForwardPolicy(SACPolicy):
                         else:
                             std = tf.layers.dense(pi_h, len(prim_dict['act'][1]), activation='relu') + EPS
                             log_std = tf.log(std)
-
+                        # print('\t'*floor + layer_name + " appended to the mu array")
                         mu_array.append(mu_)
+                        # print('\t'*floor + " Mu: ", mu_array)
                         log_std = tf.clip_by_value(log_std, LOG_STD_MIN, LOG_STD_MAX)
                         log_std_array.append(log_std)
                         act_index.append(prim_dict['act'][1])
@@ -720,27 +711,32 @@ class FeedForwardPolicy(SACPolicy):
                         self.primitive_log_std[name] = log_std
 
                         tf.summary.merge_all()
-                    print('\t' + name + " constructed")
+                    print('\t'*floor + name + " constructed\n")
             else:
                 if 'weight' not in name.split('/'):
                     with tf.variable_scope(layer_name, reuse=reuse):
-                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, prim_dict['tails'], total_action_dimension, reuse, non_log)
+                        _, mu_, log_std_ = self.construct_actor_graph(new_obs, primitives, prim_dict['tails'], reuse, non_log, floor+1)
+                    # print('\t'*floor + layer_name + " appended to the mu array")
                     mu_array.append(mu_)
+                    # print('\t'*floor + " Mu: ", mu_array)
                     log_std_array.append(log_std_)
                     act_index.append(prim_dict['act'][1])
-                    print('\t' + name + " constructed")
+                    print('\t'*floor + name + " constructed\n")
         
         assert not isinstance(weight, type(None)), \
             '\n\t\033[91m[ERROR]: No weight within tail:{0}\033[0m'.format(tails)
         selected_idx = None
-        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, total_action_dimension)
+        print('\t'*floor + "Fuse MCP")
+        pi_MCP, mu_MCP, log_std_MCP = fuse_networks_MCP(mu_array, log_std_array, weight, act_index, composite_action_dim)
+        print('\t'*floor + "Fused")
         # pi_MCP, mu_MCP, log_std_MCP, selected_idx = fuse_networks_categorical(mu_array, log_std_array, weight, act_index, total_action_dimension)
         self.selected_idx = selected_idx
         if weight_biased:
-            pi_0, mu_0, log_std_0 = fuse_networks_MCP(mu_array, log_std_array, weight_bias_0, act_index, total_action_dimension)
-            pi_1, mu_1, log_std_1 = fuse_networks_MCP(mu_array, log_std_array, weight_bias_1, act_index, total_action_dimension)
-            pi_ph, mu_ph, log_std_ph = fuse_networks_MCP(mu_array, log_std_array, weight_bias_ph, act_index, total_action_dimension)
-            return pi_MCP, mu_MCP, log_std_MCP, [pi_0, mu_0, log_std_0], [pi_1, mu_1, log_std_1], [pi_ph, mu_ph, log_std_ph]
+            print('\t'*floor + "Fuse MCP")
+            pi_ph, mu_ph, log_std_ph = fuse_networks_MCP(mu_array, log_std_array, weight_bias_ph, act_index, composite_action_dim)
+            print('\t'*floor + "Fused 1")
+            
+            return pi_MCP, mu_MCP, log_std_MCP, [pi_ph, mu_ph, log_std_ph]
         else:
             return pi_MCP, mu_MCP, log_std_MCP
   
@@ -870,12 +866,27 @@ class FeedForwardPolicy(SACPolicy):
     
     def biased_subgoal_step(self, obs, index):
         if index == 0:
-            return self.sess.run([self.policy_0, self.subgoal, self.weight_0], {self.obs_ph: obs})
+            index_list = [1, 0, 0]
+            input_dict = {self.obs_ph:obs}
+            for idx, weight_ph in zip(index_list, self.weight_idx_ph_arr):
+                input_dict[weight_ph] = self.index_eps(idx)
+            return self.sess.run([self.policy_ph, self.subgoal, self.weight_ph], input_dict)
         elif index == 1:
-            return self.sess.run([self.policy_1, self.subgoal, self.weight_1], {self.obs_ph: obs})
+            index_list = [0, 1, 0]
+            input_dict = {self.obs_ph:obs}
+            for idx, weight_ph in zip(index_list, self.weight_idx_ph_arr):
+                input_dict[weight_ph] = self.index_eps(idx)
+            return self.sess.run([self.policy_ph, self.subgoal, self.weight_ph], input_dict)
         elif type(index) == list:
-            return self.sess.run([self.policy_ph, self.subgoal, self.weight_ph], \
-                {self.obs_ph: obs, self.weight_0_ph: index[0],self.weight_1_ph: index[1]})
+            assert len(index) == len(self.weight_idx_ph_arr), \
+                '\n\t\033[91m[ERROR]: Received index list and weight placeholder length mismatch - received: {0}, holder: {1}\033[0m'.format(len(index), len(self.weight_idx_ph_arr))
+            input_dict = {self.obs_ph:obs}
+            for idx, weight_ph in zip(index, self.weight_idx_ph_arr):
+                input_dict[weight_ph] = self.index_eps(idx)
+            return self.sess.run([self.policy_ph, self.subgoal, self.weight_ph], input_dict)
+    
+    def index_eps(self,index):
+        return index-np.sign(index-0.5)*WEIGHT_EPS
     
     def get_weight(self, obs):
         return self.sess.run(self.weight, {self.obs_ph: obs})

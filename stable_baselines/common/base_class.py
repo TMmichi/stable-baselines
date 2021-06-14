@@ -139,6 +139,7 @@ class BaseRLModel(ABC):
         # NOTE(tmmichi): sanity check not required for now. Obs space can differ for now.
         # Initialize obs space of the RL model class with the environment obs space
         self.observation_space = env.observation_space
+        self.action_space = env.action_space
         # assert self.observation_space == env.observation_space, \
         #     "Error: the environment  passed must have at least the same observation space as the model was trained on. self.obs = {0}, env.obs = {1}".format(self.observation_space, env.observation_space)
         # assert self.action_space == env.action_space, \
@@ -900,15 +901,16 @@ class BaseRLModel(ABC):
             #             print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} max bound of obs[{0:2.3f}] with {1:2.3f}\033[0m".format(obs_max_array[idx], obs_max_prim, idx))
             #         obs_max_array[idx] = obs_max_prim
             # TODO(tmmichi): observation space formulation required.
-                for i, idx in enumerate(info_dict['act'][1]):
-                    act_min_prim = info_dict['act'][0].low[idx]
-                    act_max_prim = info_dict['act'][0].high[idx]
-                    if act_min_array[idx] not in [-float('inf'), act_min_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} min bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_min_array[idx], act_min_prim, idx))
-                    act_min_array[idx] = act_min_prim
-                    if act_max_array[idx] not in [float('inf'), act_max_prim]:
-                        print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} max bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_max_array[idx], act_max_prim, idx))
-                    act_max_array[idx] = act_max_prim
+                # for i, idx in enumerate(info_dict['act'][1]):
+                #     act_min_prim = info_dict['act'][0].low[idx]
+                #     act_max_prim = info_dict['act'][0].high[idx]
+                #     if act_min_array[idx] not in [-float('inf'), act_min_prim]:
+                #         print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} min bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_min_array[idx], act_min_prim, idx))
+                #     act_min_array[idx] = act_min_prim
+                #     if act_max_array[idx] not in [float('inf'), act_max_prim]:
+                #         print("\n\t\033[93m[WARNING]: You are about to overwrite dim{2} max bound of act[{0:2.3f}] with {1:2.3f}\033[0m".format(act_max_array[idx], act_max_prim, idx))
+                #     act_max_array[idx] = act_max_prim
+                pass
             ranges = [[obs_min_array, obs_max_array], [act_min_array, act_max_array]]
         return ranges
 
