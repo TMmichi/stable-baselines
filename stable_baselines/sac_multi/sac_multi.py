@@ -800,15 +800,15 @@ class SAC_MULTI(OffPolicyRLModel):
                         traj_done = True
                         random_weight = False
                     if traj_done is True:
-                        if int(np.random.rand() < 1/3) or random_weight:
-                            sampled_weight = np.random.rand()
-                            # sampled_weight = 1
-                            bias_idx = [sampled_weight, 1-sampled_weight]
-                            random_weight = True
-                        else:
-                            bias_idx = int(np.random.rand() < 0.5)  # Much faster than the np.random.randint(0,2)
-                            # bias_idx = 0
-                            traj_done = False
+                        # if int(np.random.rand() < 1/3) or random_weight:
+                        #     sampled_weight = np.random.rand()
+                        #     sampled_weight = 1
+                        #     bias_idx = [sampled_weight, 1-sampled_weight]
+                        #     random_weight = True
+                        # else:
+                        # bias_idx = int(np.random.rand() < 0.5)  # Much faster than the np.random.randint(0,2)
+                        bias_idx = 2
+                        traj_done = False
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
                     # unscaled_action = self.env.action_space.sample()

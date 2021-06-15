@@ -601,8 +601,6 @@ class FeedForwardPolicy(SACPolicy):
                             weight_idx_ph = tf.placeholder(tf.float32, shape=[], name='weight_'+str(i))
                             self.weight_idx_ph_arr.append(weight_idx_ph)
                             weight_bias_ph_arr.append(tf.ones_like(weight_bias)*weight_idx_ph)
-                        # weight_ph_0 = tf.ones_like(weight_bias) * self.weight_0_ph
-                        # weight_ph_1 = tf.ones_like(weight_bias) * self.weight_1_ph
                         weight_bias_ph = tf.concat(weight_bias_ph_arr, axis=-1)
                         self.weight_ph[name] = weight_bias_ph
                         self.weight_tf = weight
@@ -629,7 +627,7 @@ class FeedForwardPolicy(SACPolicy):
         for name in tails:
             prim_dict = primitives[name]
             print('\t'*floor + "Current tail name: ", name)
-            print('\t'*floor + "Main tail?: ",prim_dict['main_tail'])
+            print('\t'*floor + "In main tail: ",prim_dict['main_tail'])
             layer_name = prim_dict['layer_name'] if prim_dict['main_tail'] else name
             if subgoal_dict.get(name, None) is not None:
                 # subgoal_dict from weight initialization

@@ -349,17 +349,13 @@ class BaseRLModel(ABC):
                 tails = data_dict['tails']
                 self.tails = tails
                 main_tail = True
+                layer_name = 'freeze/loaded'
+                for name, item in submodule_primitive.items():
+                    print(name,": ", item['layer_name'],"\ttails: ", item['tails'])
                 for tail in tails:
                     submodule_primitive[tail]['main_tail'] = True
-                if freeze:
-                    layer_name = 'freeze/loaded'
-                else:
-                    layer_name = 'train/loaded'
-                    for tail in tails:
-                        lname = submodule_primitive[tail]['layer_name'].split("/")
-                        if lname[0] == 'freeze':
-                            lname[0] = 'train'
-                        submodule_primitive[tail]['layer_name'] = '/'.join(lname)
+                    # lname = submodule_primitive[tail]['layer_name'].split("/")
+                    # submodule_primitive[tail]['layer_name'] = '/'.join(lname)
                 cnt = True
             else:
                 primitive_name = 'loaded'
@@ -386,10 +382,24 @@ class BaseRLModel(ABC):
         else:
             raise TypeError("\n\t\033[91m[ERROR]: loaded_policy wrong type - Should be None or a tuple. Received {0}\033[0m".format(type(loaded_policy)))
         
-        self.primitives[primitive_name] = {'obs': obs, 'act': act, 'act_scale': act_scale, 'obs_relativity': obs_relativity, 'subgoal': subgoal, 'layer': {'policy': policy_layer_structure, 'value': value_layer_structure}, 'layer_name': layer_name, 'tails':tails, 'main_tail':main_tail, 'load_value': load_value}
+        prim_dict = {}
+        prim_dict['obs'] = obs
+        prim_dict['act'] = act
+        prim_dict['act_sacle'] = act_scale
+        prim_dict['obs_relativity'] = obs_relativity
+        prim_dict['subgoal'] = subgoal
+        prim_dict['layer'] = {'policy': policy_layer_structure, 'value': value_layer_structure}
+        prim_dict['layer_name'] = layer_name
+        prim_dict['tails'] = tails
+        prim_dict['main_tail'] = main_tail
+        prim_dict['load_value'] = load_value
+        self.primitives[primitive_name] = prim_dict
+        # for name, item in self.primitives.items():
+        #     if name is not 'pretrained_param':
+        #         print(name, item)
+        # quit()
         
-    @staticmethod
-    def loaded_policy_name_update(layer_name, loaded_policy_dict, load_value, cnt):
+    def loaded_policy_name_update(self, layer_name, loaded_policy_dict, load_value, cnt):
         '''
         Concatenate name of each layers with name of the primitive
 
@@ -401,6 +411,9 @@ class BaseRLModel(ABC):
         '''
         layer_name_list = []
         layer_param_dict = {}
+        if cnt:
+            for tail in self.tails:
+                weight_prim_name = tail if 'weight' in tail.split('/') else None
         for name, value in loaded_policy_dict.items():
             add_value = False
             name_elem = name.split("/")
@@ -414,15 +427,15 @@ class BaseRLModel(ABC):
                 if load_value:
                     insert_index = 3
                     add_value = True
-
             if add_value:
                 if layer_name:
-                    if cnt and 'weight' in name_elem:
+                    if cnt and 'weight' in name_elem and weight_prim_name in name:
+                        name_elem.insert(insert_index, 'train')
+                    elif insert_index == 3:
                         name_elem.insert(insert_index, 'train')
                     else:
                         name_elem.insert(insert_index, layer_name)
                 updated_name = '/'.join(name_elem)
-                # print("Updated name: ",updated_name)
                 layer_name_list.append(updated_name)
                 layer_param_dict[updated_name] = value
 
