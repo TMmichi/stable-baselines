@@ -10,12 +10,9 @@ from typing import Union, List, Callable, Optional
 import gym
 import cloudpickle
 import numpy as np
-from numpy.lib.npyio import load
 import tensorflow as tf
 
-from stable_baselines.common.radam import RAdamOptimizer
 from stable_baselines.common.misc_util import set_global_seeds
-from stable_baselines.common.math_util import unscale_action
 from stable_baselines.common.save_util import data_to_json, json_to_data, params_to_bytes, bytes_to_params
 from stable_baselines.common.policies import get_policy_from_name, ActorCriticPolicy
 from stable_baselines.common.runners import AbstractEnvRunner
@@ -73,7 +70,6 @@ class BaseRLModel(ABC):
         self.top_hierarchy_level = 0
 
         if env is not None:
-            print("env is not none")
             if isinstance(env, str):
                 if self.verbose >= 1:
                     print("Creating environment from the given name, wrapped in a DummyVecEnv.")
@@ -394,10 +390,6 @@ class BaseRLModel(ABC):
         prim_dict['main_tail'] = main_tail
         prim_dict['load_value'] = load_value
         self.primitives[primitive_name] = prim_dict
-        # for name, item in self.primitives.items():
-        #     if name is not 'pretrained_param':
-        #         print(name, item)
-        # quit()
         
     def loaded_policy_name_update(self, layer_name, loaded_policy_dict, load_value, cnt):
         '''
@@ -522,7 +514,6 @@ class BaseRLModel(ABC):
         # placeholder and an assign op, and store them to
         # self.load_param_ops as dict of variable.name -> (placeholder, assign)
         loadable_parameters = self.get_parameter_list()
-
         # Use OrderedDict to store order for backwards compatibility with
         # list-based params
         self._param_load_ops = OrderedDict()
@@ -592,7 +583,6 @@ class BaseRLModel(ABC):
                     )
                     loss = tf.reduce_mean(loss)
                 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
-                #optimizer = RAdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, weight_decay=0.0)
                 optim_op = optimizer.minimize(loss, var_list=self.params)
 
             self.sess.run(tf.global_variables_initializer())
@@ -619,7 +609,7 @@ class BaseRLModel(ABC):
                 # Full pass on the validation set
                 for _ in range(len(dataset.val_loader)):
                     expert_obs, expert_actions = dataset.get_next_batch('val')
-                    val_loss_,  = self.sess.run([loss], {obs_ph: expert_obs,
+                    val_loss_, = self.sess.run([loss], {obs_ph: expert_obs,
                                                         actions_ph: expert_actions})
                     val_loss += val_loss_
 
@@ -719,6 +709,7 @@ class BaseRLModel(ABC):
         # Make sure we have assign ops
         if self._param_load_ops is None:
             self._setup_load_operations()
+
         if isinstance(load_path_or_dict, dict):
             # Assume `load_path_or_dict` is dict of variable.name -> ndarrays we want to load
             params = load_path_or_dict
@@ -804,7 +795,7 @@ class BaseRLModel(ABC):
 
     @classmethod
     @abstractmethod
-    def load(cls, load_path, policy=None, env=None, custom_objects=None, **kwargs):
+    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
         """
         Load the model from file
 
@@ -822,7 +813,7 @@ class BaseRLModel(ABC):
         raise NotImplementedError()
 
     @staticmethod
-    def pretrainer_load(model, policy, env, **kwargs):
+    def pretrainer_load(model, env, **kwargs):
         """
         Construct trainer from policy structure
 
@@ -1217,12 +1208,8 @@ class ActorCriticRLModel(BaseRLModel):
         
         clipped_actions = actions
         # Clip the actions to avoid out of bound error
-        # if self.act_model.squash:
-        #     if isinstance(self.env.action_space, gym.spaces.Box):
-        #         clipped_actions = unscale_action(self.env.action_space, clipped_actions)
-        # else:
-    #         if isinstance(self.env.action_space, gym.spaces.Box):
-    #             clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+        if isinstance(self.action_space, gym.spaces.Box):
+            clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
         if not vectorized_env:
             if state is not None:
@@ -1230,7 +1217,6 @@ class ActorCriticRLModel(BaseRLModel):
             clipped_actions = clipped_actions[0]
 
         return clipped_actions, states
-
 
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         if state is None:
@@ -1429,6 +1415,7 @@ class OffPolicyRLModel(BaseRLModel):
         :param kwargs: extra arguments to change the model when loading
         """
         data, params = cls._load_from_file(load_path, custom_objects=custom_objects)
+
         if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
             raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
                              "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
@@ -1442,8 +1429,7 @@ class OffPolicyRLModel(BaseRLModel):
         model = cls(policy=policy_model, env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
-        
-        # NOTE: Once loaded, type of policy is fixed
+
         model.set_env(env)
         model.setup_model()
 
